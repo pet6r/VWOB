@@ -1,165 +1,335 @@
 import numpy as np
-from vispy import app, scene
-from vispy.visuals import SphereVisual
-from vispy.visuals.transforms import MatrixTransform
-import websocket
 import json
-import time
-import base64
-import hashlib
-import hmac
-import os
 import threading
+from collections import deque
+from queue import Queue
 
-# Initialize global variables
-bid_volumes = np.zeros(10)
-ask_volumes = np.zeros(10)
+import websocket
+from vispy import app, scene
+from vispy.scene.visuals import Text, Sphere, Image
 
-# API Connection to environment variables
-API_KEY = os.getenv('apikey')
-API_SECRET = os.getenv('secretkey')
+###############################################################################
+# DataManager: Manages incoming book data, store bids/asks, provide geometry
+###############################################################################
+class DataManager:
+    def __init__(self, max_snapshots=500, order_book_depth=1000, volume_spike_threshold=50):
+        self.max_snapshots = max_snapshots
+        self.order_book_depth = order_book_depth
+        self.volume_spike_threshold = volume_spike_threshold
 
-# Function to create a Kraken WebSocket signature
-def get_signature(api_path, nonce, post_data, secret):
-    message = (str(nonce) + post_data).encode()
-    secret = base64.b64decode(secret)
-    hashed = hmac.new(secret, message, hashlib.sha512)
-    return base64.b64encode(hashed.digest()).decode()
+        self.bid_data = {}
+        self.ask_data = {}
+        self.historical_depth = deque(maxlen=self.max_snapshots)
 
-# Ensure bid_volumes and ask_volumes are initialized
-bid_volumes = np.zeros(10)
-ask_volumes = np.zeros(10)
+        self.previous_bid_data = {}
+        self.previous_ask_data = {}
+        self.previous_mid_price = None
 
-# Real-time rendering update with fallback for scaling
-# Real-time rendering update
-def update(event):
-    global bid_volumes, ask_volumes
+        self.message_queue = Queue()
 
-    # Check if volumes are available
-    if len(bid_volumes) > 0 and len(ask_volumes) > 0:
-        # Interpolate to match the vertex count
-        ask_volumes_interp = np.interp(np.linspace(0, len(ask_volumes) - 1, asks_mountain_vertices.shape[0]), np.arange(len(ask_volumes)), ask_volumes)
-        bid_volumes_interp = np.interp(np.linspace(0, len(bid_volumes) - 1, bids_mountain_vertices.shape[0]), np.arange(len(bid_volumes)), bid_volumes)
+    def on_message(self, ws, msg):
+        """Callback from websocket, push raw message to queue."""
+        self.message_queue.put(msg)
 
-        # Update mountains based on new volumes
-        asks_mountain_vertices[:, 1] = 600 * ask_volumes_interp / np.max(ask_volumes_interp)
-        bids_mountain_vertices[:, 1] = 600 * bid_volumes_interp / np.max(bid_volumes_interp)
+    def process_messages(self):
+        """Process all pending messages to update self.bid_data / self.ask_data."""
+        while not self.message_queue.empty():
+            raw = self.message_queue.get()
+            try:
+                data = json.loads(raw)
+                # We expect data like: [channel_id, { "b": [...], "a": [...] }, ...]
+                if isinstance(data, list) and len(data) > 1:
+                    # parse bids
+                    for b in data[1].get("b", []):
+                        price, volume = float(b[0]), float(b[1])
+                        if volume == 0:
+                            self.bid_data.pop(price, None)
+                        else:
+                            self.bid_data[price] = volume
 
-        # Dynamically change colors based on volume magnitude
-        ask_color_intensity = np.clip(ask_volumes_interp / np.max(ask_volumes_interp), 0.1, 1.0)
-        bid_color_intensity = np.clip(bid_volumes_interp / np.max(bid_volumes_interp), 0.1, 1.0)
+                    # parse asks
+                    for a in data[1].get("a", []):
+                        price, volume = float(a[0]), float(a[1])
+                        if volume == 0:
+                            self.ask_data.pop(price, None)
+                        else:
+                            self.ask_data[price] = volume
+            except Exception as e:
+                print("Error processing message:", e)
 
-        asks_mountain.mesh_data.set_vertices(asks_mountain_vertices)
-        bids_mountain.mesh_data.set_vertices(bids_mountain_vertices)
+    def get_mid_price(self):
+        """Compute mid price from highest bid, lowest ask."""
+        if self.bid_data and self.ask_data:
+            highest_bid = max(self.bid_data.keys())
+            lowest_ask  = min(self.ask_data.keys())
+            return (highest_bid + lowest_ask) / 2
+        return 0
 
-        asks_mountain.color = (0.2, 0.2, ask_color_intensity.mean(), 1.0)
-        bids_mountain.color = (0.2, 0.2, bid_color_intensity.mean(), 1.0)
+    def has_changed(self):
+        """Return True if the order book changed since last update."""
+        # Quick check: compare bid/ask dicts
+        # You could do a more sophisticated approach if needed
+        changed = (self.bid_data != self.previous_bid_data or
+                   self.ask_data != self.previous_ask_data)
+        return changed
 
-# Add a safeguard to ensure WebSocket updates are properly received
-def on_message(ws, message):
-    global bid_volumes, ask_volumes
-    print(f"Message received: {message}")  # Debugging WebSocket messages
-    try:
-        data = json.loads(message)
-        if isinstance(data, list) and len(data) > 1:
-            if "b" in data[1]:  # Handle bid data
-                bids = data[1]["b"]
-                if bids:  # Ensure there are valid bids
-                    bid_volumes = np.array([float(b[1]) for b in bids])
-            if "a" in data[1]:  # Handle ask data
-                asks = data[1]["a"]
-                if asks:  # Ensure there are valid asks
-                    ask_volumes = np.array([float(a[1]) for a in asks])
-    except Exception as e:
-        print(f"Error parsing message: {e}")
+    def record_current_snapshot(self, mid_price):
+        """Build geometry for the current snapshot, store in historical_depth."""
+        verts, cols = self.build_wireframe_geometry(mid_price)
+        self.historical_depth.append((verts, cols))
+
+        # Save current state for next check
+        self.previous_bid_data = dict(self.bid_data)
+        self.previous_ask_data = dict(self.ask_data)
+        self.previous_mid_price = mid_price
+
+    def build_wireframe_geometry(self, mid_price):
+        """Create vertices + colors for the current snapshot from self.bid_data / self.ask_data."""
+        verts = []
+        cols  = []
+
+        # Bids
+        for price, volume in self.bid_data.items():
+            x = mid_price - price
+            y = volume * 10
+            if volume > self.volume_spike_threshold:
+                color = [1, 1, 0, 1]  # bright yellow
+            else:
+                color = [0, 1, 0.6, 1]
+            # 2D rectangle extruded along y, from (x-5,0,0) to (x+5,0,y)
+            verts.extend([
+                [x - 5, 0,   0],
+                [x + 5, 0,   0],
+                [x + 5, 0,   y],
+                [x - 5, 0,   y],
+                [x - 5, 0,   0],
+            ])
+            cols.extend([color]*5)
+
+        # Asks
+        for price, volume in self.ask_data.items():
+            x = mid_price - price
+            y = volume * 10
+            if volume > self.volume_spike_threshold:
+                color = [1, 1, 0, 1]
+            else:
+                color = [1, 0.2, 0.8, 1]
+            verts.extend([
+                [x - 5, 0,   0],
+                [x + 5, 0,   0],
+                [x + 5, 0,   y],
+                [x - 5, 0,   y],
+                [x - 5, 0,   0],
+            ])
+            cols.extend([color]*5)
+
+        return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
 
 
-# WebSocket connection open handler
+###############################################################################
+# VaporWaveOrderBookVisualizer: Builds the scene & updates it from a DataManager
+###############################################################################
+class VaporWaveOrderBookVisualizer:
+    def __init__(self, data_manager):
+        self.data = data_manager
+
+        # create the scene canvas
+        self.canvas = scene.SceneCanvas(
+            keys='interactive',
+            bgcolor='#220033',
+            show=True,
+            config={'depth_size': 24}
+        )
+        self.view = self.canvas.central_widget.add_view()
+
+        # camera
+        self.view.camera = 'turntable'
+        self.view.camera.distance = 2000
+        self.view.camera.center   = (0, 0, 0)  # (x, z, y)
+        self.view.camera.elevation = 15
+        self.view.camera.azimuth   = 0
+        self.view.camera.fov       = 60
+
+        # create visuals
+        self._init_scene()
+
+        # timer controlling our main update loop
+        self.timer = app.Timer(interval=0.5, connect=self.on_timer, start=True)
+
+    def _init_scene(self):
+        """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
+        # Big "Sun"
+        self.sun = Sphere(radius=2000, method="latitude", parent=self.view.scene,
+                          color=(1.0, 0.5, 0.9, 1.0))
+        self.sun.transform = scene.transforms.STTransform(translate=(0, 8000, 800))
+
+        # Grid
+        self.grid = scene.visuals.GridLines(color=(1.0, 0.2, 1.0, 0.5), parent=self.view.scene)
+        self.grid.transform = scene.transforms.STTransform(scale=(5, 1, 5), translate=(0, 0, 0))
+
+        # Vapor Plane
+        plane_size = 20000
+        plane_data = np.zeros((512, 512, 4), dtype=np.float32)
+        for i in range(512):
+            for j in range(512):
+                t = float(i) / 511
+                plane_data[i, j, 0] = t
+                plane_data[i, j, 1] = 0
+                plane_data[i, j, 2] = t
+                plane_data[i, j, 3] = 1.0
+        self.plane_tex = scene.visuals.Image(data=plane_data, parent=self.view.scene,
+                                             interpolation='linear')
+        self.plane_tex.transform = scene.transforms.STTransform(
+            translate=(-plane_size/2, -plane_size/2, 0),
+            scale=(plane_size/512, plane_size/512, 1)
+        )
+
+        # main wireframe
+        self.batched_wireframe = scene.visuals.Line(parent=self.view.scene)
+
+        # bloom "ghost" wireframe
+        self.ghost_wireframe = scene.visuals.Line(parent=self.view.scene)
+        self.ghost_wireframe.set_gl_state(
+            blend=True,
+            depth_test=True,
+            blend_func=('src_alpha', 'one')  # additive blending
+        )
+
+        # label for "The Mirror Stage"
+        self.mirror_label = Text(text="|", color='white', font_size=20,
+                                 parent=self.view.scene, anchor_x='center', anchor_y='center',
+                                 bold=True)
+        self.mirror_label.transform = scene.transforms.STTransform(translate=(0, 0, 200))
+
+        # current price label at bottom-left overlay
+        self.current_price_label = Text(
+            text="???",
+            color="white",
+            font_size=18,
+            anchor_x="left",
+            anchor_y="bottom",
+            parent=self.canvas.scene  # 2D overlay
+        )
+        self.current_price_label.transform = scene.transforms.STTransform(translate=(10, 10))
+
+        # arrow-key movement offsets
+        self.camera_z_offset = 0
+        self.camera_y_offset = 0
+        self.canvas.events.key_press.connect(self.on_key_press)
+
+    def on_key_press(self, event):
+        """Move camera center with arrow keys."""
+        step = 10
+        if event.key == 'Left':
+            self.camera_z_offset -= step
+        elif event.key == 'Right':
+            self.camera_z_offset += step
+        elif event.key == 'Up':
+            self.camera_y_offset += step
+        elif event.key == 'Down':
+            self.camera_y_offset -= step
+
+        old_center = list(self.view.camera.center)
+        old_center[1] = self.camera_z_offset
+        old_center[2] = self.camera_y_offset
+        self.view.camera.center = tuple(old_center)
+        self.canvas.update()
+
+    def on_timer(self, event):
+        """Called periodically; let's see if data changed, then update scene."""
+        # 1) Let DataManager process messages
+        self.data.process_messages()
+
+        # 2) Check if anything changed in the order book
+        if not self.data.has_changed():
+            return  # no update needed, skip
+
+        # 3) Rebuild geometry if changed
+        mid_price = self.data.get_mid_price()
+        self.data.record_current_snapshot(mid_price)
+
+        # 4) Combine geometry from historical_depth
+        all_verts = []
+        all_cols  = []
+        for i, (snap_verts, snap_cols) in enumerate(self.data.historical_depth):
+            shifted = snap_verts.copy()
+            # shift in +z => second coord
+            shifted[:,1] += (len(self.data.historical_depth)-1 - i)*5
+            all_verts.append(shifted)
+            all_cols.append(snap_cols)
+
+        merged_verts = np.concatenate(all_verts, axis=0) if all_verts else np.zeros((0,3))
+        merged_cols  = np.concatenate(all_cols, axis=0) if all_cols else np.zeros((0,4))
+
+        # 5) Update main wireframe
+        self.batched_wireframe.set_data(pos=merged_verts, color=merged_cols)
+
+        # Tron bloom: ghost wireframe
+        ghost_verts = merged_verts.copy() * 1.01  # slightly bigger
+        ghost_cols  = merged_cols.copy()
+        ghost_cols[:,3] *= 0.2  # reduce alpha
+        self.ghost_wireframe.set_data(pos=ghost_verts, color=ghost_cols)
+
+        # 6) Update price label
+        self.current_price_label.text = f"{int(round(mid_price))}"
+
+        # 7) Spin camera a bit
+        self.view.camera.azimuth += 0.2
+        self.canvas.update()
+
+    def run(self):
+        """Start the Vispy event loop."""
+        app.run()
+
+###############################################################################
+# WebSocket Setup
+###############################################################################
 def on_open(ws):
-    # Define subscription message for public order book
-    subscribe_data = {
+    subscription = {
         "event": "subscribe",
         "pair": ["XBT/USD"],
-        "subscription": {"name": "book", "depth": 10}
+        "subscription": {"name": "book", "depth": 1000}
     }
+    ws.send(json.dumps(subscription))
+    print("Subscribed to order book")
 
-    # Send subscription message
-    ws.send(json.dumps(subscribe_data))
+def on_error(ws, error):
+    print("WebSocket error:", error)
 
-# Connect to Kraken WebSocket API
-url = "wss://ws.kraken.com/"
-ws = websocket.WebSocketApp(url, on_message=on_message, on_open=on_open)
+def on_close(ws, status_code, msg):
+    print("WebSocket closed:", status_code, msg)
 
-# Visualization Setup
-canvas = scene.SceneCanvas(keys='interactive', bgcolor='black', show=True)
-view = canvas.central_widget.add_view()
+def build_websocket(data_mgr):
+    """Create the WebSocketApp, hooking data_mgr's callbacks."""
+    return websocket.WebSocketApp(
+        "wss://ws.kraken.com/",
+        on_open=on_open,
+        on_error=on_error,
+        on_close=on_close,
+        on_message=data_mgr.on_message
+    )
 
-# Camera Settings
-view.camera = 'turntable'
-view.camera.distance = 6700
-view.camera.center = (0, 0, 3000)
-view.camera.elevation = -5
-view.camera.azimuth = 0
-view.camera.fov = 60
+###############################################################################
+# Main
+###############################################################################
+def main():
+    # Create data manager
+    data_mgr = DataManager(
+        max_snapshots=500,
+        order_book_depth=1000,
+        volume_spike_threshold=50
+    )
 
-# Background and Sun
-background_data = np.linspace([0, 0, 0], [0.5, 0, 0.5], 500).astype('float32')
-background = scene.visuals.Image(background_data.reshape(1, 500, 3), parent=canvas.scene, interpolation='bicubic')
-background.transform = scene.transforms.STTransform(scale=(500, 500), translate=(0, 0, -2000))
+    # Create visualizer referencing that data
+    viz = VaporWaveOrderBookVisualizer(data_mgr)
 
-sun = scene.visuals.create_visual_node(SphereVisual)(radius=600, method='latitude', parent=view.scene, color=(1.0, 0.5, 0.2, 1.0))
-sun.transform = scene.transforms.STTransform(translate=(0, 300, 2000))
+    # Create and run the websocket in a background thread
+    ws = build_websocket(data_mgr)
+    t = threading.Thread(target=ws.run_forever, daemon=True)
+    t.start()
 
-# Grid Floor
-grid = scene.visuals.GridLines(color=(1.0, 0.2, 1.0, 1.0), parent=view.scene)
-grid.transform = scene.transforms.STTransform(scale=(10, 10, 1), translate=(0, -200, 1500))
+    # Start the Vispy event loop
+    viz.run()
 
-# Function to generate mountain vertices and faces
-def create_mountain_data(base_x, base_z, height, width, density=100):
-    x = np.linspace(base_x - width / 2, base_x + width / 2, density)
-    z = np.linspace(base_z - width / 2, base_z + width / 2, density)
-    x, z = np.meshgrid(x, z)
-    y = height * np.exp(-((x - base_x) ** 2 + (z - base_z) ** 2) / (2 * (width / 3) ** 2))
-    vertices = np.column_stack((x.flatten(), y.flatten(), z.flatten()))
-    faces = []
-    for i in range(density - 1):
-        for j in range(density - 1):
-            idx = i * density + j
-            faces.append([idx, idx + 1, idx + density])
-            faces.append([idx + 1, idx + density + 1, idx + density])
-    faces = np.array(faces, dtype=np.int32)
-    return vertices, faces
-
-# Create mountains
-asks_mountain_vertices, asks_mountain_faces = create_mountain_data(-500, 1500, 600, 800)
-bids_mountain_vertices, bids_mountain_faces = create_mountain_data(500, 1500, 600, 800)
-
-asks_mountain = scene.visuals.Mesh(vertices=asks_mountain_vertices, faces=asks_mountain_faces, color=(0.2, 0.2, 1.0, 1.0), parent=view.scene)
-bids_mountain = scene.visuals.Mesh(vertices=bids_mountain_vertices, faces=bids_mountain_faces, color=(0.2, 0.2, 1.0, 1.0), parent=view.scene)
-
-# Adjust mountain transforms using MatrixTransform
-asks_mountain_transform = MatrixTransform()
-asks_mountain_transform.translate((-300, 600, 2000))  # Align asks mountain positively
-asks_mountain_transform.scale((1.8, 2.5, 1))  # Scale height and width
-asks_mountain_transform.rotate(90, (0, 1, 0))  # Rotate 90 degrees clockwise along the Y-axis
-asks_mountain_transform.rotate(90, (1, 0, 0))  # Flip by 90 degrees along the X-axis
-asks_mountain.transform = asks_mountain_transform
-
-bids_mountain_transform = MatrixTransform()
-bids_mountain_transform.translate((300, 600, 2000))  # Align bids mountain positively
-bids_mountain_transform.scale((1.8, 2.5, 1))  # Scale height and width
-bids_mountain_transform.rotate(-90, (0, 1, 0))  # Rotate -90 degrees counterclockwise along the Y-axis
-bids_mountain_transform.rotate(90, (1, 0, 0))  # Flip by 90 degrees along the X-axis
-bids_mountain.transform = bids_mountain_transform
-
-
-# Timer for Updates
-timer = app.Timer(interval=0.1, connect=update, start=True)
-
-# Run WebSocket in Separate Thread
-websocket_thread = threading.Thread(target=ws.run_forever)
-websocket_thread.daemon = True
-websocket_thread.start()
-
-# Run Application
-app.run()
+if __name__ == "__main__":
+    main()

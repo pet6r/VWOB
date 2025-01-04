@@ -137,7 +137,8 @@ def plot_mountain(price, volume, timestamp, quadrant):
     mountain = scene.visuals.Markers()
     mountain.set_data(vertex, edge_color=None, face_color=(0.2, 0.8, 1.0, 1.0), size=5)
     mountain.parent = view.scene
-# Function to generate mountain vertices and faces
+
+
 # Function to generate mountain vertices and faces
 def create_mountain_data(base_x, base_z, height, width, density=100):
     x = np.linspace(base_x - width / 2, base_x + width / 2, density)
