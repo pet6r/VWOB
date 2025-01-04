@@ -67,8 +67,6 @@ class DataManager:
 
     def has_changed(self):
         """Return True if the order book changed since last update."""
-        # Quick check: compare bid/ask dicts
-        # You could do a more sophisticated approach if needed
         changed = (self.bid_data != self.previous_bid_data or
                    self.ask_data != self.previous_ask_data)
         return changed
@@ -96,7 +94,6 @@ class DataManager:
                 color = [1, 1, 0, 1]  # bright yellow
             else:
                 color = [0, 1, 0.6, 1]
-            # 2D rectangle extruded along y, from (x-5,0,0) to (x+5,0,y)
             verts.extend([
                 [x - 5, 0,   0],
                 [x + 5, 0,   0],
@@ -144,9 +141,9 @@ class VaporWaveOrderBookVisualizer:
 
         # camera
         self.view.camera = 'turntable'
-        self.view.camera.distance = 2000
+        self.view.camera.distance = 1500
         self.view.camera.center   = (0, 0, 0)  # (x, z, y)
-        self.view.camera.elevation = 15
+        self.view.camera.elevation = 20
         self.view.camera.azimuth   = 0
         self.view.camera.fov       = 60
 
@@ -159,8 +156,7 @@ class VaporWaveOrderBookVisualizer:
     def _init_scene(self):
         """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
         # Big "Sun"
-        self.sun = Sphere(radius=2000, method="latitude", parent=self.view.scene,
-                          color=(1.0, 0.5, 0.9, 1.0))
+        self.sun = Sphere(radius=2000, method="latitude", parent=self.view.scene, color=(1.0, 0.5, 0.9, 1.0))
         self.sun.transform = scene.transforms.STTransform(translate=(0, 8000, 800))
 
         # Grid
@@ -177,11 +173,8 @@ class VaporWaveOrderBookVisualizer:
                 plane_data[i, j, 1] = 0
                 plane_data[i, j, 2] = t
                 plane_data[i, j, 3] = 1.0
-        self.plane_tex = scene.visuals.Image(data=plane_data, parent=self.view.scene,
-                                             interpolation='linear')
-        self.plane_tex.transform = scene.transforms.STTransform(
-            translate=(-plane_size/2, -plane_size/2, 0),
-            scale=(plane_size/512, plane_size/512, 1)
+        self.plane_tex = scene.visuals.Image(data=plane_data, parent=self.view.scene, interpolation='linear')
+        self.plane_tex.transform = scene.transforms.STTransform(translate=(-plane_size/2, -plane_size/2, 0), scale=(plane_size/512, plane_size/512, 1)
         )
 
         # main wireframe
@@ -195,15 +188,23 @@ class VaporWaveOrderBookVisualizer:
             blend_func=('src_alpha', 'one')  # additive blending
         )
 
+        # WHITE OUTLINE: brand-new wireframe dedicated to outlining the newest snapshot
+        self.outline_wireframe = scene.visuals.Line(parent=self.view.scene)
+        self.outline_wireframe.set_gl_state(
+            blend=True,
+            depth_test=True,
+            line_width=5.0  # slightly thicker line
+        )
+
         # label for "The Mirror Stage"
         self.mirror_label = Text(text="|", color='white', font_size=20,
                                  parent=self.view.scene, anchor_x='center', anchor_y='center',
                                  bold=True)
         self.mirror_label.transform = scene.transforms.STTransform(translate=(0, 0, 200))
 
-        # current price label at bottom-left overlay
+        # current price label at top-left of screen
         self.current_price_label = Text(
-            text="???",
+            text="?",
             color="white",
             font_size=18,
             anchor_x="left",
@@ -267,27 +268,43 @@ class VaporWaveOrderBookVisualizer:
         # Tron bloom: ghost wireframe
         ghost_verts = merged_verts.copy() * 1.01  # slightly bigger
         ghost_cols  = merged_cols.copy()
-        ghost_cols[:,3] *= 0.2  # reduce alpha
+        ghost_cols[:,3] *= 0.3  # reduce alpha
         self.ghost_wireframe.set_data(pos=ghost_verts, color=ghost_cols)
 
         # 6) Update price label
-        self.current_price_label.text = f"{int(round(mid_price))}"
+        self.current_price_label.text = f"{float(mid_price)}"
 
-        # 7) Spin camera a bit
-        self.view.camera.azimuth += 0.2
+        # 7) White Outline For Latest Snapshot
+        if self.data.historical_depth:
+            newest_verts, newest_cols = self.data.historical_depth[-2]
+            outline_verts = newest_verts.copy()
+            outline_cols  = np.ones_like(newest_cols)
+            # ARGB => set R,G,B=1, alpha=1 => pure white
+            outline_cols[:, :3] = 1.0
+            outline_cols[:, 3]  = 1.0
+
+            # shift it just like we do for the newest snapshot => i=last => shift=0
+            # or if you'd like an offset, you can do something else
+            # for consistency, let's shift it by 0
+            # (no shift needed since the newest is shifted by 0 above)
+            self.outline_wireframe.set_data(pos=outline_verts, color=outline_cols)
+
+        # 8) Spin camera a bit
+        self.view.camera.azimuth += 0.05
         self.canvas.update()
 
     def run(self):
         """Start the Vispy event loop."""
         app.run()
 
+
 ###############################################################################
-# WebSocket Setup
+# WebSocket
 ###############################################################################
 def on_open(ws):
     subscription = {
         "event": "subscribe",
-        "pair": ["XBT/USD"],
+        "pair": ["ETH/USDT"],
         "subscription": {"name": "book", "depth": 1000}
     }
     ws.send(json.dumps(subscription))
@@ -315,9 +332,9 @@ def build_websocket(data_mgr):
 def main():
     # Create data manager
     data_mgr = DataManager(
-        max_snapshots=500,
+        max_snapshots=1000,
         order_book_depth=1000,
-        volume_spike_threshold=50
+        volume_spike_threshold=61
     )
 
     # Create visualizer referencing that data
