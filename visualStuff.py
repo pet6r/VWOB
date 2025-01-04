@@ -148,7 +148,8 @@ class VaporWaveOrderBookVisualizer:
             keys='interactive',
             bgcolor='#220033',
             show=True,
-            config={'depth_size': 24}
+            config={'depth_size': 24, 'samples': 8}  # Enable 8x MSAA (multi-sample anti-aliasing)
+
         )
         self.view = self.canvas.central_widget.add_view()
 
