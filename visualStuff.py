@@ -12,7 +12,8 @@ from vispy.scene.visuals import Text, Sphere, Image
 # DataManager: Manages incoming book data, store bids/asks, provide geometry
 ###############################################################################
 class DataManager:
-    def __init__(self, max_snapshots=500, order_book_depth=1000, volume_spike_threshold=50):
+
+    def __init__(self, max_snapshots=1000, order_book_depth=1000, volume_spike_threshold=61):
         self.max_snapshots = max_snapshots
         self.order_book_depth = order_book_depth
         self.volume_spike_threshold = volume_spike_threshold
@@ -87,11 +88,11 @@ class DataManager:
         cols  = []
 
         # Bids
-        for price, volume in self.bid_data.items():
+        for price, volume in sorted(self.bid_data.items(), reverse=True)[:self.order_book_depth]:
             x = mid_price - price
             y = volume * 10
             if volume > self.volume_spike_threshold:
-                color = [1, 1, 0, 1]  # bright yellow
+                color = [0.8, 1.0, 0.2, 0.2]  # Neon green/yellow with 20% transparency
             else:
                 color = [0, 1, 0.6, 1]
             verts.extend([
@@ -104,11 +105,11 @@ class DataManager:
             cols.extend([color]*5)
 
         # Asks
-        for price, volume in self.ask_data.items():
+        for price, volume in sorted(self.ask_data.items())[:self.order_book_depth]:
             x = mid_price - price
             y = volume * 10
             if volume > self.volume_spike_threshold:
-                color = [1, 1, 0, 1]
+                color = [1.0, 0.2, 0.6, 0.2]
             else:
                 color = [1, 0.2, 0.8, 1]
             verts.extend([
@@ -334,7 +335,7 @@ class VaporWaveOrderBookVisualizer:
 def on_open(ws):
     subscription = {
         "event": "subscribe",
-        "pair": ["BTC/USDT"],
+        "pair": ["ETH/USD"],
         "subscription": {"name": "book", "depth": 1000}
     }
     ws.send(json.dumps(subscription))
@@ -362,7 +363,7 @@ def build_websocket(data_mgr):
 def main():
     # Create data manager
     data_mgr = DataManager(
-        max_snapshots=1000,
+        max_snapshots=1500,
         order_book_depth=1000,
         volume_spike_threshold=61
     )
