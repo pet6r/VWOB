@@ -122,6 +122,19 @@ class DataManager:
 
         return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
 
+    def get_market_control(self):
+        """Determine whether buyers or sellers are in control."""
+        total_bid_volume = sum(self.bid_data.values())
+        total_ask_volume = sum(self.ask_data.values())
+
+        if total_bid_volume > total_ask_volume:
+            return "Buyers in Control"
+        elif total_ask_volume > total_bid_volume:
+            return "Sellers in Control"
+        else:
+            return "Neutral"
+
+
 
 ###############################################################################
 # VaporWaveOrderBookVisualizer: Builds the scene & updates it from a DataManager
@@ -218,6 +231,18 @@ class VaporWaveOrderBookVisualizer:
         self.camera_y_offset = 0
         self.canvas.events.key_press.connect(self.on_key_press)
 
+        # for the market control label
+        self.control_label = Text(
+            text="Neutral",
+            color="white",
+            font_size=10,
+            anchor_x="left",
+            anchor_y="bottom",
+            parent=self.canvas.scene
+        )
+        self.control_label.transform = scene.transforms.STTransform(translate=(10, 50))  # Position near the top-left
+
+
     def on_key_press(self, event):
         """Move camera center with arrow keys."""
         step = 10
@@ -289,7 +314,11 @@ class VaporWaveOrderBookVisualizer:
             # (no shift needed since the newest is shifted by 0 above)
             self.outline_wireframe.set_data(pos=outline_verts, color=outline_cols)
 
-        # 8) Spin camera a bit
+        # 8) Update control label
+            market_control = self.data.get_market_control()
+            self.control_label.text = market_control
+
+        # 9) Spin camera a bit
         self.view.camera.azimuth += 0.05
         self.canvas.update()
 
@@ -304,7 +333,7 @@ class VaporWaveOrderBookVisualizer:
 def on_open(ws):
     subscription = {
         "event": "subscribe",
-        "pair": ["ETH/USDT"],
+        "pair": ["BTC/USDT"],
         "subscription": {"name": "book", "depth": 1000}
     }
     ws.send(json.dumps(subscription))
