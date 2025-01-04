@@ -16,15 +16,15 @@ class DataManager:
     def __init__(self, max_snapshots=1000, order_book_depth=1000, volume_spike_threshold=61):
         self.max_snapshots = max_snapshots
         self.order_book_depth = order_book_depth
-        self.volume_spike_threshold = volume_spike_threshold
+        self.volume_spike_threshold = volume_spike_threshold #look for extremes
 
-        self.bid_data = {}
-        self.ask_data = {}
-        self.historical_depth = deque(maxlen=self.max_snapshots)
+        self.bid_data = {} # webconn data for bids/buys
+        self.ask_data = {} # webconn data for asks/sells
+        self.historical_depth = deque(maxlen=self.max_snapshots) # memory of depth data
 
         self.previous_bid_data = {}
         self.previous_ask_data = {}
-        self.previous_mid_price = None
+        self.previous_mid_price = None # current price
 
         self.message_queue = Queue()
 
@@ -109,7 +109,7 @@ class DataManager:
             x = mid_price - price
             y = volume * 10
             if volume > self.volume_spike_threshold:
-                color = [1.0, 0.2, 0.6, 0.2]
+                color = [1.0, 0.2, 0.6, 0.2] # hot red/pink with opacity
             else:
                 color = [1, 0.2, 0.8, 1]
             verts.extend([
@@ -166,7 +166,7 @@ class VaporWaveOrderBookVisualizer:
         self._init_scene()
 
         # timer controlling our main update loop
-        self.timer = app.Timer(interval=0.5, connect=self.on_timer, start=True)
+        self.timer = app.Timer(interval=1, connect=self.on_timer, start=True)
 
     def _init_scene(self):
         """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
@@ -188,7 +188,7 @@ class VaporWaveOrderBookVisualizer:
                 plane_data[i, j, 1] = 0
                 plane_data[i, j, 2] = t
                 plane_data[i, j, 3] = 1.0
-        self.plane_tex = scene.visuals.Image(data=plane_data, parent=self.view.scene, interpolation='linear')
+        self.plane_tex = scene.visuals.Image(data=plane_data, parent=self.view.scene, interpolation='linear') # xzy
         self.plane_tex.transform = scene.transforms.STTransform(translate=(-plane_size/2, -plane_size/2, 0), scale=(plane_size/512, plane_size/512, 1)
         )
 
@@ -212,10 +212,8 @@ class VaporWaveOrderBookVisualizer:
         )
 
         # label for "The Mirror Stage"
-        self.mirror_label = Text(text="|", color='white', font_size=20,
-                                 parent=self.view.scene, anchor_x='center', anchor_y='center',
-                                 bold=True)
-        self.mirror_label.transform = scene.transforms.STTransform(translate=(0, 0, 200))
+        self.mirror_label = Text(text="^", color='white', font_size=900, parent=self.view.scene, anchor_x='center', anchor_y='center', bold=True)
+        self.mirror_label.transform = scene.transforms.STTransform(translate=(0, 0, -2)) # xzy
 
         # current price label at top-left of screen
         self.current_price_label = Text(
@@ -335,7 +333,7 @@ class VaporWaveOrderBookVisualizer:
 def on_open(ws):
     subscription = {
         "event": "subscribe",
-        "pair": ["ETH/USD"],
+        "pair": ["BTC/USDT"],
         "subscription": {"name": "book", "depth": 1000}
     }
     ws.send(json.dumps(subscription))
