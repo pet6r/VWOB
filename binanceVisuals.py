@@ -246,7 +246,7 @@ class VaporWaveOrderBookVisualizer:
         self.control_label.text = market_control
 
         # 9) Spin camera slightly for dynamic effect
-        self.view.camera.azimuth += 0.05
+        self.view.camera.azimuth += 0.00
         self.canvas.update()
 
     def run(self):

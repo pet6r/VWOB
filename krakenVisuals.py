@@ -212,7 +212,7 @@ class VaporWaveOrderBookVisualizer:
         )
 
         # label for "The Mirror Stage"
-        self.mirror_label = Text(text="^", color='white', font_size=900, parent=self.view.scene, anchor_x='center', anchor_y='center', bold=True)
+        self.mirror_label = Text(text="^", color='white', font_size=2000, parent=self.view.scene, anchor_x='center', anchor_y='center', bold=True)
         self.mirror_label.transform = scene.transforms.STTransform(translate=(0, 0, -2)) # xzy
 
         # current price label at top-left of screen
