@@ -166,7 +166,7 @@ class VaporWaveOrderBookVisualizer:
         self._init_scene()
 
         # timer controlling our main update loop
-        self.timer = app.Timer(interval=1, connect=self.on_timer, start=True)
+        self.timer = app.Timer(interval=0.1, connect=self.on_timer, start=True)
 
     def _init_scene(self):
         """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
@@ -333,7 +333,7 @@ class VaporWaveOrderBookVisualizer:
 def on_open(ws):
     subscription = {
         "event": "subscribe",
-        "pair": ["BTC/USDT"],
+        "pair": ["ETH/USDT"],
         "subscription": {"name": "book", "depth": 1000}
     }
     ws.send(json.dumps(subscription))
