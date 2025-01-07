@@ -12,7 +12,7 @@ from vispy.scene.visuals import Text, Sphere, Image
 # DataManager: Manages incoming book data, stores bids/asks, provides geometry
 ###############################################################################
 class DataManager:
-    def __init__(self, max_snapshots=500, order_book_depth=1000, volume_spike_threshold=61):
+    def __init__(self, max_snapshots=100, order_book_depth=200, volume_spike_threshold=61):
         self.max_snapshots = max_snapshots
         self.order_book_depth = order_book_depth
         self.volume_spike_threshold = volume_spike_threshold
@@ -29,44 +29,41 @@ class DataManager:
 
     def on_message(self, ws, raw_message):
         """Callback from WebSocket, push raw message to queue."""
-        #print("Raw WebSocket message received:", raw_message[:200])  # Log the first 200 characters of the message
         self.message_queue.put(raw_message)
 
-
     def process_messages(self):
-            """Process all pending messages from the WebSocket."""
-            while not self.message_queue.empty():
-                raw = self.message_queue.get()
-                try:
-                    data = json.loads(raw)
+        """Process all pending messages from the WebSocket."""
+        while not self.message_queue.empty():
+            raw = self.message_queue.get()
+            try:
+                data = json.loads(raw)
 
-                    if data["type"] == "snapshot":
-                        # Initialize the order book with snapshot data
-                        self.bid_data = {float(bid[0]): float(bid[1]) for bid in data["bids"]}
-                        self.ask_data = {float(ask[0]): float(ask[1]) for ask in data["asks"]}
+                if data["type"] == "snapshot":
+                    # Initialize the order book with snapshot data
+                    self.bid_data = {float(bid[0]): float(bid[1]) for bid in data["bids"]}
+                    self.ask_data = {float(ask[0]): float(ask[1]) for ask in data["asks"]}
 
-                    elif data["type"] == "l2update":
-                        # Apply updates to the order book
-                        changes = data["changes"]
-                        for change in changes:
-                            side, price, volume = change
-                            price = float(price)
-                            volume = float(volume)
+                elif data["type"] == "l2update":
+                    # Apply updates to the order book
+                    changes = data["changes"]
+                    for change in changes:
+                        side, price, volume = change
+                        price = float(price)
+                        volume = float(volume)
 
-                            if side == "buy":  # Update bid data
-                                if volume == 0:
-                                    self.bid_data.pop(price, None)
-                                else:
-                                    self.bid_data[price] = volume
-                            elif side == "sell":  # Update ask data
-                                if volume == 0:
-                                    self.ask_data.pop(price, None)
-                                else:
-                                    self.ask_data[price] = volume
+                        if side == "buy":  # Update bid data
+                            if volume == 0:
+                                self.bid_data.pop(price, None)
+                            else:
+                                self.bid_data[price] = volume
+                        elif side == "sell":  # Update ask data
+                            if volume == 0:
+                                self.ask_data.pop(price, None)
+                            else:
+                                self.ask_data[price] = volume
 
-                except Exception as e:
-                    print("Error processing message:", e)
-
+            except Exception as e:
+                print("Error processing message:", e)
 
     def get_mid_price(self):
         """Compute mid price from highest bid and lowest ask."""
@@ -90,7 +87,6 @@ class DataManager:
         self.previous_ask_data = dict(self.ask_data)
         self.previous_mid_price = mid_price
 
-
     def build_wireframe_geometry(self, mid_price):
         """Create vertices and colors for the current snapshot."""
         verts = []
@@ -98,7 +94,7 @@ class DataManager:
 
         # Bids
         for price, volume in sorted(self.bid_data.items(), reverse=True)[:self.order_book_depth]:
-            x = mid_price - price
+            x = price - mid_price  # Adjusted to reflect price relative to mid_price
             y = volume * 10
             color = [0.0, 1.0, 0.0, 1.0] if volume <= self.volume_spike_threshold else [0.2, 1.0, 0.2, 1.0]  # Green
             verts.extend([
@@ -112,7 +108,7 @@ class DataManager:
 
         # Asks
         for price, volume in sorted(self.ask_data.items())[:self.order_book_depth]:
-            x = mid_price - price
+            x = price - mid_price  # Adjusted to reflect price relative to mid_price
             y = volume * 10
             color = [1.0, 0.0, 0.0, 1.0] if volume <= self.volume_spike_threshold else [1.0, 0.2, 0.2, 1.0]  # Red
             verts.extend([
@@ -126,7 +122,6 @@ class DataManager:
 
         return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
 
-
     def get_market_control(self):
         """Determine whether buyers or sellers are in control."""
         total_bid_volume = sum(self.bid_data.values())
@@ -138,7 +133,6 @@ class DataManager:
             return "Sellers in Control"
         else:
             return "Neutral"
-
 
 ###############################################################################
 # VaporWaveOrderBookVisualizer: Builds the scene and updates from DataManager
@@ -156,10 +150,11 @@ class VaporWaveOrderBookVisualizer:
 
         self._init_scene()
 
-        self.timer = app.Timer(interval=0.05, connect=self.on_timer, start=True)
+        # Increase timer interval to reduce update frequency (e.g., 100 ms for 10 Hz)
+        self.timer = app.Timer(interval=0.1, connect=self.on_timer, start=True)
 
     def _init_scene(self):
-        """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
+        """Set up the scene visuals: sun, grid, plane, wireframes, text labels."""
         # Big "Sun"
         self.sun = Sphere(radius=2000, method="latitude", parent=self.view.scene, color=(1.0, 0.5, 0.9, 1.0))
         self.sun.transform = scene.transforms.STTransform(translate=(0, 8000, 800))
@@ -185,30 +180,47 @@ class VaporWaveOrderBookVisualizer:
         )
 
         # Main wireframe
-        self.batched_wireframe = scene.visuals.Line(parent=self.view.scene)
+        self.batched_wireframe = scene.visuals.Line(parent=self.view.scene, connect='segments', width=1)
 
         # Tron bloom: ghost wireframe
-        self.ghost_wireframe = scene.visuals.Line(parent=self.view.scene)
+        self.ghost_wireframe = scene.visuals.Line(parent=self.view.scene, connect='segments', width=1)
         self.ghost_wireframe.set_gl_state(blend=True, depth_test=True, blend_func=("src_alpha", "one"))
 
         # WHITE OUTLINE: Latest snapshot highlight
-        self.outline_wireframe = scene.visuals.Line(parent=self.view.scene)
+        self.outline_wireframe = scene.visuals.Line(parent=self.view.scene, connect='segments', width=2)
         self.outline_wireframe.set_gl_state(
             blend=True,
             depth_test=True,
-            line_width=5.0  # Slightly thicker line for better visibility
+            line_width=2.0  # Slightly thicker line for better visibility
         )
 
         # Current price label
         self.current_price_label = Text(
-            text="?", color="white", font_size=18, anchor_x="left", anchor_y="bottom", parent=self.canvas.scene)
+            text="?", color="white", font_size=18, anchor_x="left", anchor_y="bottom", parent=self.canvas.scene
+        )
         self.current_price_label.transform = scene.transforms.STTransform(translate=(10, 10))
 
         # Market control label
         self.control_label = Text(
-            text="Neutral", color="white", font_size=10, anchor_x="left", anchor_y="bottom", parent=self.canvas.scene
+            text="Neutral", color="white", font_size=12, anchor_x="left", anchor_y="bottom", parent=self.canvas.scene
         )
         self.control_label.transform = scene.transforms.STTransform(translate=(10, 50))  # Position near top-left
+
+        # Initialize X-axis labels
+        self.x_axis_labels = []
+        self.num_ticks = 5  # Reduced number of ticks for performance
+        for i in range(self.num_ticks):
+            label = Text(
+                text="0.00", color="white", font_size=900, anchor_x="center", anchor_y="top", parent=self.view.scene
+            )
+            self.x_axis_labels.append(label)
+
+        # X-axis line
+        self.x_axis_line = scene.visuals.Line(
+            pos=[[-1000, 0, 0], [1000, 0, 0]],
+            color=(1, 1, 1, 1),
+            parent=self.view.scene
+        )
 
     def on_timer(self, event):
         """Called periodically; updates the scene with data changes."""
@@ -223,46 +235,84 @@ class VaporWaveOrderBookVisualizer:
         mid_price = self.data.get_mid_price()
         self.data.record_current_snapshot(mid_price)
 
-        # 4) Combine geometry from historical_depth with Z-offset
+        # 4) Combine geometry from historical_depth with Y-offset and apply fading
         all_verts = []
         all_cols = []
+        num_snapshots = len(self.data.historical_depth)
         for i, (snap_verts, snap_cols) in enumerate(self.data.historical_depth):
             shifted = snap_verts.copy()
-            shifted[:, 1] += (len(self.data.historical_depth) - 1 - i) * 5  # Offset in Z (third) axis
+            shifted[:, 1] += (num_snapshots - 1 - i) * 5  # Offset in Y axis for depth
             all_verts.append(shifted)
-            all_cols.append(snap_cols)
 
-        merged_verts = np.concatenate(all_verts, axis=0) if all_verts else np.zeros((0, 3))
-        merged_cols = np.concatenate(all_cols, axis=0) if all_cols else np.zeros((0, 4))
+            # Calculate fade factor (newer snapshots are more opaque)
+            fade_factor = (i + 1) / num_snapshots  # 0 < fade_factor <=1
+            faded_cols = snap_cols.copy()
+            faded_cols[:, 3] *= fade_factor  # Apply fade to alpha
+            all_cols.append(faded_cols)
+
+        if all_verts:
+            merged_verts = np.concatenate(all_verts, axis=0)
+            merged_cols = np.concatenate(all_cols, axis=0)
+        else:
+            merged_verts = np.zeros((0, 3), dtype=np.float32)
+            merged_cols = np.zeros((0, 4), dtype=np.float32)
 
         # 5) Update main wireframe
-        self.batched_wireframe.set_data(pos=merged_verts, color=merged_cols)
+        self.batched_wireframe.set_data(pos=merged_verts, color=merged_cols, connect='segments')
 
-        # Tron bloom: ghost wireframe
+        # 6) Tron bloom: ghost wireframe
         ghost_verts = merged_verts * 1.01  # Slightly bigger
         ghost_cols = merged_cols.copy()
         ghost_cols[:, 3] *= 0.3  # Reduce alpha for ghosting
-        self.ghost_wireframe.set_data(pos=ghost_verts, color=ghost_cols)
+        self.ghost_wireframe.set_data(pos=ghost_verts, color=ghost_cols, connect='segments')
 
-        # 6) Update price label
-        self.current_price_label.text = f"{float(mid_price):.2f}"
+        # 7) Update price label
+        self.current_price_label.text = f"{mid_price:.2f}"
 
-        # 7) White Outline for Latest Snapshot
-        if self.data.historical_depth:
-            newest_verts, newest_cols = self.data.historical_depth[-2]
+        # 8) White Outline for Latest Snapshot
+        if len(self.data.historical_depth) >= 1:
+            newest_verts, newest_cols = self.data.historical_depth[-1]
             outline_verts = newest_verts.copy()
             outline_cols = np.ones_like(newest_cols)
             outline_cols[:, :3] = 1.0  # Pure white
             outline_cols[:, 3] = 1.0  # Full opacity
-            self.outline_wireframe.set_data(pos=outline_verts, color=outline_cols)
+            self.outline_wireframe.set_data(pos=outline_verts, color=outline_cols, connect='segments')
 
-        # 8) Update market control label
+        # 9) Update market control label
         market_control = self.data.get_market_control()
         self.control_label.text = market_control
 
-        # 9) Spin camera slightly for dynamic effect
-        self.view.camera.azimuth += 0.00
+        # 10) Update X-axis labels
+        self.update_x_axis_labels(mid_price)
+
+        # 11) Spin camera slightly for dynamic effect (optional)
+        # self.view.camera.azimuth += 0.1  # Uncomment to enable camera rotation
+
         self.canvas.update()
+
+    def update_x_axis_labels(self, mid_price):
+        """Update the x-axis price labels based on current mid price and order book depth."""
+        # Determine the range of prices to display
+        bid_prices = sorted(self.data.bid_data.keys(), reverse=True)[:self.data.order_book_depth]
+        ask_prices = sorted(self.data.ask_data.keys())[:self.data.order_book_depth]
+        if not bid_prices or not ask_prices:
+            return  # Not enough data to set axis
+
+        min_price = min(bid_prices[-1], ask_prices[-1])
+        max_price = max(bid_prices[0], ask_prices[0])
+
+        # Calculate tick spacing
+        price_range = max_price - min_price
+        if price_range == 0:
+            price_range = 1  # Prevent division by zero
+
+        tick_spacing = price_range / (self.num_ticks - 1)
+
+        for i, label in enumerate(self.x_axis_labels):
+            price = min_price + i * tick_spacing
+            x_position = price - mid_price  # Adjust position relative to mid_price
+            label.text = f"{price:.2f}"
+            label.transform = scene.transforms.STTransform(translate=(x_position, 0, -2))  # Position below the x-axis
 
     def run(self):
         app.run()
@@ -274,11 +324,10 @@ def on_open(ws):
     subscription = {
         "type": "subscribe",
         "product_ids": ["BTC-USD"],  # Replace with desired trading pairs
-        "channels": ["level2_batch"]      # level2 requires auth/api, level2_batch doesnt require any auth/api
+        "channels": ["level2_batch"]  # level2_batch doesn't require auth/api
     }
     ws.send(json.dumps(subscription))
     print("Subscribed to Coinbase order book")
-
 
 def on_error(ws, error):
     print("WebSocket error:", error)
@@ -295,23 +344,25 @@ def build_websocket(data_mgr):
         on_message=data_mgr.on_message
     )
 
-
 ###############################################################################
 # Main
 ###############################################################################
 def main():
-    # Create data manager
+    # Create data manager with optimized settings
     data_mgr = DataManager(
-        max_snapshots=500,
-        order_book_depth=1000,
+        max_snapshots=100,        # Reduced from 500
+        order_book_depth=200,     # Reduced from 1000
         volume_spike_threshold=61
     )
 
     # Create visualizer referencing that data
     viz = VaporWaveOrderBookVisualizer(data_mgr)
 
+    # Start WebSocket in a separate thread
     ws = build_websocket(data_mgr)
     threading.Thread(target=ws.run_forever, daemon=True).start()
+
+    # Run the visualization
     viz.run()
 
 if __name__ == "__main__":
