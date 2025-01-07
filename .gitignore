@@ -176,3 +176,9 @@ cython_debug/
 # Other
 name.txt
 pyrightconfig.json
+
+# Files
+auth_ws.py
+subscribe.py
+subscribe_ack.py
+binance_ws.py

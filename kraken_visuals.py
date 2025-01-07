@@ -333,7 +333,7 @@ class VaporWaveOrderBookVisualizer:
 def on_open(ws):
     subscription = {
         "event": "subscribe",
-        "pair": ["ETH/USDT"],
+        "pair": ["BTC/USDT"],
         "subscription": {"name": "book", "depth": 1000}
     }
     ws.send(json.dumps(subscription))
