@@ -361,7 +361,7 @@ def build_websocket(data_mgr):
 def main():
     # Create data manager
     data_mgr = DataManager(
-        max_snapshots=1500,
+        max_snapshots=1000,
         order_book_depth=1000,
         volume_spike_threshold=61
     )
