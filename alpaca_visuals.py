@@ -9,12 +9,13 @@ from dotenv import load_dotenv
 import os
 from vispy import app, scene
 from vispy.scene.visuals import Text, Sphere, Image
+import time  # Added for timestamp handling
 
 ###############################################################################
 # DataManager: Manages incoming order book data, stores bids/asks, provides geometry
 ###############################################################################
 class DataManager:
-    def __init__(self, max_snapshots=500, order_book_depth=1000):
+    def __init__(self, max_snapshots=250, order_book_depth=500):
         self.max_snapshots = max_snapshots
         self.order_book_depth = order_book_depth
         self.bid_data = {}
@@ -22,10 +23,12 @@ class DataManager:
         # Store raw bid and ask data snapshots
         self.historical_depth = deque(maxlen=self.max_snapshots)
         self.message_queue = Queue()
+        self.last_message_time = 0  # Added to track the timestamp of the last message
 
     def on_message(self, ws, raw_message):
         """Callback from WebSocket, push raw message to queue."""
         self.message_queue.put(raw_message)
+        self.last_message_time = time.time()  # Record the time when message is received
 
     def process_messages(self):
         """Process all pending messages to update bid_data/ask_data."""
@@ -98,7 +101,9 @@ class DataManager:
 class VaporWaveOrderBookVisualizer:
     def __init__(self, data_manager):
         self.data = data_manager
-        self.canvas = scene.SceneCanvas(keys="interactive", bgcolor="#220033", show=True)
+        self.canvas = scene.SceneCanvas(
+            keys="interactive", bgcolor="#220033", show=True
+        )
         self.view = self.canvas.central_widget.add_view()
         self.view.camera = "turntable"
         self.view.camera.distance = 1500
@@ -109,16 +114,27 @@ class VaporWaveOrderBookVisualizer:
         self.camera_y_offset = 0
         self.wireframe_type = "rectangle"  # Initialize wireframe_type
         self._init_scene()
-        self.timer = app.Timer(interval=0.1, connect=self.on_timer, start=True)
+        self.timer = app.Timer(interval=0.01, connect=self.on_timer, start=True)
+
+        # Initialize FPS tracking
+        self.frame_times = deque(maxlen=100)  # Stores timestamps of recent frames
+        self.fps = 0
 
     def _init_scene(self):
         """Set up the scene visuals: sun, grid, wireframes, text labels."""
         # Sun Sphere
-        self.sun = Sphere(radius=1000, method="latitude", parent=self.view.scene, color=(1.0, 0.5, 0.9, 1.0))
+        self.sun = Sphere(
+            radius=1000,
+            method="latitude",
+            parent=self.view.scene,
+            color=(1.0, 0.5, 0.9, 1.0),
+        )
         self.sun.transform = scene.transforms.STTransform(translate=(0, 8000, 500))
 
         # Grid Lines
-        self.grid = scene.visuals.GridLines(color=(1.0, 0.2, 1.0, 0.5), parent=self.view.scene)
+        self.grid = scene.visuals.GridLines(
+            color=(1.0, 0.2, 1.0, 0.5), parent=self.view.scene
+        )
 
         # Wireframe Lines
         self.batched_wireframe = scene.visuals.Line(parent=self.view.scene)
@@ -130,9 +146,11 @@ class VaporWaveOrderBookVisualizer:
             font_size=18,
             anchor_x="left",
             anchor_y="bottom",
-            parent=self.canvas.scene
+            parent=self.canvas.scene,
         )
-        self.current_price_label.transform = scene.transforms.STTransform(translate=(10, 10))
+        self.current_price_label.transform = scene.transforms.STTransform(
+            translate=(10, 10)
+        )
 
         # Spread Label
         self.spread_label = Text(
@@ -141,9 +159,21 @@ class VaporWaveOrderBookVisualizer:
             font_size=18,
             anchor_x="left",
             anchor_y="bottom",
-            parent=self.canvas.scene
+            parent=self.canvas.scene,
         )
         self.spread_label.transform = scene.transforms.STTransform(translate=(10, 40))
+
+
+        # **Added FPS Label**
+        self.fps_label = Text(
+            text="FPS: ?",
+            color="lightgreen",
+            font_size=18,
+            anchor_x="left",
+            anchor_y="bottom",
+            parent=self.canvas.scene,
+        )
+        self.fps_label.transform = scene.transforms.STTransform(translate=(10, 200))
 
         # Connect key press event
         self.canvas.events.key_press.connect(self.on_key_press)
@@ -160,6 +190,18 @@ class VaporWaveOrderBookVisualizer:
 
     def on_timer(self, event):
         """Called periodically; updates the scene with data changes."""
+        current_time = time.time()
+
+        # **FPS Tracking**
+        self.frame_times.append(current_time)
+        # Remove frames older than 1 second
+        while self.frame_times and self.frame_times[0] < current_time - 1:
+            self.frame_times.popleft()
+        self.fps = len(self.frame_times)
+        self.fps_label.text = f"FPS: {self.fps}"
+
+
+        # Process incoming messages
         self.data.process_messages()
         mid_price = self.data.get_mid_price()
         if mid_price == 0:
@@ -184,7 +226,9 @@ class VaporWaveOrderBookVisualizer:
             z_offset = (len(self.data.historical_depth) - 1 - i) * 5
 
             # Process Bids
-            for price, volume in sorted(bid_data.items(), reverse=True)[:self.data.order_book_depth]:
+            for price, volume in sorted(bid_data.items(), reverse=True)[
+                : self.data.order_book_depth
+            ]:
                 if volume < volume_threshold:
                     continue
                 x = mid_price - price
@@ -192,25 +236,29 @@ class VaporWaveOrderBookVisualizer:
                 color = [0.0, 1.0, 0.0, 1.0]  # Green for bids
 
                 if self.wireframe_type == "rectangle":
-                    verts.extend([
-                        [x - 5, z_offset, 0],
-                        [x + 5, z_offset, 0],
-                        [x + 5, z_offset, y],
-                        [x - 5, z_offset, y],
-                        [x - 5, z_offset, 0],
-                    ])
+                    verts.extend(
+                        [
+                            [x - 5, z_offset, 0],
+                            [x + 5, z_offset, 0],
+                            [x + 5, z_offset, y],
+                            [x - 5, z_offset, y],
+                            [x - 5, z_offset, 0],
+                        ]
+                    )
                     cols.extend([color] * 5)
                 elif self.wireframe_type == "triangle":
-                    verts.extend([
-                        [x - 5, z_offset, 0],
-                        [x + 5, z_offset, 0],
-                        [x, z_offset, y],
-                        [x - 5, z_offset, 0],  # Close the triangle
-                    ])
+                    verts.extend(
+                        [
+                            [x - 5, z_offset, 0],
+                            [x + 5, z_offset, 0],
+                            [x, z_offset, y],
+                            [x - 5, z_offset, 0],  # Close the triangle
+                        ]
+                    )
                     cols.extend([color] * 4)
 
             # Process Asks
-            for price, volume in sorted(ask_data.items())[:self.data.order_book_depth]:
+            for price, volume in sorted(ask_data.items())[: self.data.order_book_depth]:
                 if volume < volume_threshold:
                     continue
                 x = mid_price - price
@@ -218,21 +266,25 @@ class VaporWaveOrderBookVisualizer:
                 color = [1.0, 0.0, 0.0, 1.0]  # Red for asks
 
                 if self.wireframe_type == "rectangle":
-                    verts.extend([
-                        [x - 5, z_offset, 0],
-                        [x + 5, z_offset, 0],
-                        [x + 5, z_offset, y],
-                        [x - 5, z_offset, y],
-                        [x - 5, z_offset, 0],
-                    ])
+                    verts.extend(
+                        [
+                            [x - 5, z_offset, 0],
+                            [x + 5, z_offset, 0],
+                            [x + 5, z_offset, y],
+                            [x - 5, z_offset, y],
+                            [x - 5, z_offset, 0],
+                        ]
+                    )
                     cols.extend([color] * 5)
                 elif self.wireframe_type == "triangle":
-                    verts.extend([
-                        [x - 5, z_offset, 0],
-                        [x + 5, z_offset, 0],
-                        [x, z_offset, y],
-                        [x - 5, z_offset, 0],  # Close the triangle
-                    ])
+                    verts.extend(
+                        [
+                            [x - 5, z_offset, 0],
+                            [x + 5, z_offset, 0],
+                            [x, z_offset, y],
+                            [x - 5, z_offset, 0],  # Close the triangle
+                        ]
+                    )
                     cols.extend([color] * 4)
 
         if verts and cols:
@@ -254,16 +306,13 @@ def on_open(ws):
     print("Authenticating with Alpaca...")
     auth_payload = {
         "action": "auth",
-        "key": os.getenv('ALPACA_PAPER_API_KEY'),
-        "secret": os.getenv('ALPACA_PAPER_API_SECRET')
+        "key": os.getenv("ALPACA_PAPER_API_KEY"),
+        "secret": os.getenv("ALPACA_PAPER_API_SECRET"),
     }
     ws.send(json.dumps(auth_payload))
 
     print("Subscribing to order book updates...")
-    subscription_payload = {
-        "action": "subscribe",
-        "orderbooks": ["BTC/USD"]
-    }
+    subscription_payload = {"action": "subscribe", "orderbooks": ["BTC/USD"]}
     ws.send(json.dumps(subscription_payload))
 
 
@@ -281,7 +330,7 @@ def build_websocket(data_mgr):
         on_open=on_open,
         on_error=on_error,
         on_close=on_close,
-        on_message=data_mgr.on_message
+        on_message=data_mgr.on_message,
     )
 
 
@@ -292,14 +341,14 @@ def main():
     load_dotenv()
 
     # Verify that Alpaca API credentials are set
-    api_key = os.getenv('ALPACA_PAPER_API_KEY')
-    api_secret = os.getenv('ALPACA_PAPER_API_SECRET')
+    api_key = os.getenv("ALPACA_PAPER_API_KEY")
+    api_secret = os.getenv("ALPACA_PAPER_API_SECRET")
 
     if not api_key or not api_secret:
         print("Error: Alpaca API credentials not found in environment variables.")
         return
 
-    data_mgr = DataManager(max_snapshots=500, order_book_depth=1000)
+    data_mgr = DataManager(max_snapshots=200, order_book_depth=500)
     viz = VaporWaveOrderBookVisualizer(data_mgr)
     ws = build_websocket(data_mgr)
     threading.Thread(target=ws.run_forever, daemon=True).start()

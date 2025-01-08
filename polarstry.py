@@ -7,17 +7,26 @@ from queue import Queue
 from vispy import app, scene
 from vispy.scene.visuals import Text, Sphere, Image
 
+
 ###############################################################################
 # DataManager: Manages incoming book data, stores bids/asks, provides geometry
 ###############################################################################
 class DataManager:
-    def __init__(self, max_snapshots=500, order_book_depth=1000, volume_spike_threshold=61):
+    def __init__(
+        self, max_snapshots=500, order_book_depth=1000, volume_spike_threshold=61
+    ):
         self.max_snapshots = max_snapshots
         self.order_book_depth = order_book_depth
         self.volume_spike_threshold = volume_spike_threshold
 
-        self.bid_data = pl.DataFrame({"price": [], "volume": []}, schema={"price": pl.Float64, "volume": pl.Float64})
-        self.ask_data = pl.DataFrame({"price": [], "volume": []}, schema={"price": pl.Float64, "volume": pl.Float64})
+        self.bid_data = pl.DataFrame(
+            {"price": [], "volume": []},
+            schema={"price": pl.Float64, "volume": pl.Float64},
+        )
+        self.ask_data = pl.DataFrame(
+            {"price": [], "volume": []},
+            schema={"price": pl.Float64, "volume": pl.Float64},
+        )
         self.historical_depth = []  # Store geometry snapshots as a list
 
         self.previous_mid_price = None
@@ -52,23 +61,27 @@ class DataManager:
                     # Sanitize and update bids
                     bid_updates = pl.DataFrame(
                         self.sanitize_data(data.get("b", [])),
-                        schema={"price": pl.Float64, "volume": pl.Float64}
+                        schema={"price": pl.Float64, "volume": pl.Float64},
                     )
                     self.bid_data = (
                         self.bid_data.vstack(bid_updates)
                         .filter(pl.col("volume") > 0)  # Remove zero-volume rows
-                        .unique(subset="price", keep="last")  # Keep latest updates per price
+                        .unique(
+                            subset="price", keep="last"
+                        )  # Keep latest updates per price
                     )
 
                     # Sanitize and update asks
                     ask_updates = pl.DataFrame(
                         self.sanitize_data(data.get("a", [])),
-                        schema={"price": pl.Float64, "volume": pl.Float64}
+                        schema={"price": pl.Float64, "volume": pl.Float64},
                     )
                     self.ask_data = (
                         self.ask_data.vstack(ask_updates)
                         .filter(pl.col("volume") > 0)  # Remove zero-volume rows
-                        .unique(subset="price", keep="last")  # Keep latest updates per price
+                        .unique(
+                            subset="price", keep="last"
+                        )  # Keep latest updates per price
                     )
 
                     # Debug: Print updated bid and ask data
@@ -92,7 +105,9 @@ class DataManager:
     def record_current_snapshot(self, mid_price):
         """Build geometry for the current snapshot, store in historical_depth."""
         verts, cols = self.build_wireframe_geometry(mid_price)
-        self.historical_depth.append({"mid_price": mid_price, "verts": verts, "cols": cols})
+        self.historical_depth.append(
+            {"mid_price": mid_price, "verts": verts, "cols": cols}
+        )
         if len(self.historical_depth) > self.max_snapshots:
             self.historical_depth.pop(0)
 
@@ -102,31 +117,47 @@ class DataManager:
         cols = []
 
         # Bids
-        for price, volume in zip(self.bid_data["price"].to_list(), self.bid_data["volume"].to_list()):
+        for price, volume in zip(
+            self.bid_data["price"].to_list(), self.bid_data["volume"].to_list()
+        ):
             x = mid_price - price
             y = volume * 10
-            color = [0.0, 1.0, 0.0, 1.0] if volume <= self.volume_spike_threshold else [0.2, 1.0, 0.2, 1.0]
-            verts.extend([
-                [x - 5, 0, 0],
-                [x + 5, 0, 0],
-                [x + 5, 0, y],
-                [x - 5, 0, y],
-                [x - 5, 0, 0],
-            ])
+            color = (
+                [0.0, 1.0, 0.0, 1.0]
+                if volume <= self.volume_spike_threshold
+                else [0.2, 1.0, 0.2, 1.0]
+            )
+            verts.extend(
+                [
+                    [x - 5, 0, 0],
+                    [x + 5, 0, 0],
+                    [x + 5, 0, y],
+                    [x - 5, 0, y],
+                    [x - 5, 0, 0],
+                ]
+            )
             cols.extend([color] * 5)
 
         # Asks
-        for price, volume in zip(self.ask_data["price"].to_list(), self.ask_data["volume"].to_list()):
+        for price, volume in zip(
+            self.ask_data["price"].to_list(), self.ask_data["volume"].to_list()
+        ):
             x = mid_price - price
             y = volume * 10
-            color = [1.0, 0.0, 0.0, 1.0] if volume <= self.volume_spike_threshold else [1.0, 0.2, 0.2, 1.0]
-            verts.extend([
-                [x - 5, 0, 0],
-                [x + 5, 0, 0],
-                [x + 5, 0, y],
-                [x - 5, 0, y],
-                [x - 5, 0, 0],
-            ])
+            color = (
+                [1.0, 0.0, 0.0, 1.0]
+                if volume <= self.volume_spike_threshold
+                else [1.0, 0.2, 0.2, 1.0]
+            )
+            verts.extend(
+                [
+                    [x - 5, 0, 0],
+                    [x + 5, 0, 0],
+                    [x + 5, 0, y],
+                    [x - 5, 0, y],
+                    [x - 5, 0, 0],
+                ]
+            )
             cols.extend([color] * 5)
 
         return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
@@ -143,13 +174,16 @@ class DataManager:
         else:
             return "Neutral"
 
+
 ###############################################################################
 # VaporWaveOrderBookVisualizer: Builds the scene and updates from DataManager
 ###############################################################################
 class VaporWaveOrderBookVisualizer:
     def __init__(self, data_manager):
         self.data = data_manager
-        self.canvas = scene.SceneCanvas(keys="interactive", bgcolor="#220033", show=True)
+        self.canvas = scene.SceneCanvas(
+            keys="interactive", bgcolor="#220033", show=True
+        )
         self.view = self.canvas.central_widget.add_view()
         self.view.camera = "turntable"
         self.view.camera.distance = 1500
@@ -163,11 +197,23 @@ class VaporWaveOrderBookVisualizer:
 
     def _init_scene(self):
         """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
-        self.sun = Sphere(radius=2000, method="latitude", parent=self.view.scene, color=(1.0, 0.5, 0.9, 1.0))
-        self.grid = scene.visuals.GridLines(color=(1.0, 0.2, 1.0, 0.5), parent=self.view.scene)
+        self.sun = Sphere(
+            radius=2000,
+            method="latitude",
+            parent=self.view.scene,
+            color=(1.0, 0.5, 0.9, 1.0),
+        )
+        self.grid = scene.visuals.GridLines(
+            color=(1.0, 0.2, 1.0, 0.5), parent=self.view.scene
+        )
         self.batched_wireframe = scene.visuals.Line(parent=self.view.scene)
         self.current_price_label = Text(
-            text="?", color="white", font_size=18, anchor_x="left", anchor_y="bottom", parent=self.canvas.scene
+            text="?",
+            color="white",
+            font_size=18,
+            anchor_x="left",
+            anchor_y="bottom",
+            parent=self.canvas.scene,
         )
 
     def on_timer(self, event):
@@ -189,31 +235,33 @@ class VaporWaveOrderBookVisualizer:
             all_verts.append(verts)
             all_cols.append(cols)
 
-        self.batched_wireframe.set_data(pos=np.concatenate(all_verts), color=np.concatenate(all_cols))
+        self.batched_wireframe.set_data(
+            pos=np.concatenate(all_verts), color=np.concatenate(all_cols)
+        )
         self.current_price_label.text = f"{mid_price:.2f}"
         self.canvas.update()
 
     def run(self):
         app.run()
 
+
 ###############################################################################
 # WebSocket
 ###############################################################################
 def on_open(ws):
     symbol = "btcusdt"
-    params = {
-        "method": "SUBSCRIBE",
-        "params": [f"{symbol}@depth@100ms"],
-        "id": 1
-    }
+    params = {"method": "SUBSCRIBE", "params": [f"{symbol}@depth@100ms"], "id": 1}
     ws.send(json.dumps(params))
     print("Subscribed to Binance order book")
+
 
 def on_error(ws, error):
     print("WebSocket error:", error)
 
+
 def on_close(ws, status_code, msg):
     print("WebSocket closed:", status_code, msg)
+
 
 def build_websocket(data_mgr):
     return websocket.WebSocketApp(
@@ -221,17 +269,16 @@ def build_websocket(data_mgr):
         on_open=on_open,
         on_error=on_error,
         on_close=on_close,
-        on_message=data_mgr.on_message
+        on_message=data_mgr.on_message,
     )
+
 
 ###############################################################################
 # Main
 ###############################################################################
 def main():
     data_mgr = DataManager(
-        max_snapshots=500,
-        order_book_depth=1000,
-        volume_spike_threshold=61
+        max_snapshots=500, order_book_depth=1000, volume_spike_threshold=61
     )
 
     viz = VaporWaveOrderBookVisualizer(data_mgr)
@@ -239,6 +286,7 @@ def main():
     ws = build_websocket(data_mgr)
     threading.Thread(target=ws.run_forever, daemon=True).start()
     viz.run()
+
 
 if __name__ == "__main__":
     main()
