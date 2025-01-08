@@ -19,6 +19,7 @@ class DataManager:
         self.order_book_depth = order_book_depth
         self.bid_data = {}
         self.ask_data = {}
+        # Store raw bid and ask data snapshots
         self.historical_depth = deque(maxlen=self.max_snapshots)
         self.message_queue = Queue()
 
@@ -31,33 +32,32 @@ class DataManager:
         while not self.message_queue.empty():
             raw = self.message_queue.get()
             try:
-                #print("Raw message:", raw)  # Log raw messages for debugging
                 messages = json.loads(raw)
 
-                if not isinstance(messages, list):  # Expecting a list of messages
+                if not isinstance(messages, list):
                     print("Unexpected message format:", raw)
                     continue
 
                 for message in messages:
                     if message.get("T") == "o":  # Order book update
-                        bids = message.get("b", [])  # List of bids
-                        asks = message.get("a", [])  # List of asks
+                        bids = message.get("b", [])
+                        asks = message.get("a", [])
 
                         # Update bids
                         for bid in bids:
-                            price = float(bid["p"])  # Correct parsing for price
-                            size = float(bid["s"])  # Correct parsing for size
+                            price = float(bid["p"])
+                            size = float(bid["s"])
                             if size == 0:
-                                self.bid_data.pop(price, None)  # Remove price level
+                                self.bid_data.pop(price, None)
                             else:
                                 self.bid_data[price] = size
 
                         # Update asks
                         for ask in asks:
-                            price = float(ask["p"])  # Correct parsing for price
-                            size = float(ask["s"])  # Correct parsing for size
+                            price = float(ask["p"])
+                            size = float(ask["s"])
                             if size == 0:
-                                self.ask_data.pop(price, None)  # Remove price level
+                                self.ask_data.pop(price, None)
                             else:
                                 self.ask_data[price] = size
 
@@ -68,7 +68,6 @@ class DataManager:
             except Exception as e:
                 print("Error processing message:", e)
 
-
     def get_mid_price(self):
         """Compute mid price from highest bid and lowest ask."""
         if self.bid_data and self.ask_data:
@@ -77,50 +76,20 @@ class DataManager:
             return (highest_bid + lowest_ask) / 2
         return 0
 
+    def get_market_spread(self):
+        """Calculate the spread between the lowest ask and the highest bid."""
+        if self.bid_data and self.ask_data:
+            highest_bid = max(self.bid_data.keys())
+            lowest_ask = min(self.ask_data.keys())
+            return lowest_ask - highest_bid
+        return 0
 
     def record_current_snapshot(self, mid_price):
-        """Build geometry for the current snapshot, store in historical_depth."""
-        verts, cols = self.build_wireframe_geometry(mid_price)
-        self.historical_depth.append((verts, cols))
-
-    def build_wireframe_geometry(self, mid_price, volume_threshold=0.5):
-        """Create vertices and colors for the current snapshot, filtering low-volume data."""
-        verts = []
-        cols = []
-
-        # Bids
-        for price, volume in sorted(self.bid_data.items(), reverse=True)[:self.order_book_depth]:
-            if volume < volume_threshold:
-                continue  # Skip low-volume bids
-            x = mid_price - price
-            y = volume * 10
-            color = [0.0, 1.0, 0.0, 1.0]  # Green
-            verts.extend([
-                [x - 5, 0, 0],
-                [x + 5, 0, 0],
-                [x + 5, 0, y],
-                [x - 5, 0, y],
-                [x - 5, 0, 0],
-            ])
-            cols.extend([color] * 5)
-
-        # Asks
-        for price, volume in sorted(self.ask_data.items())[:self.order_book_depth]:
-            if volume < volume_threshold:
-                continue  # Skip low-volume asks
-            x = mid_price - price
-            y = volume * 10
-            color = [1.0, 0.0, 0.0, 1.0]  # Red
-            verts.extend([
-                [x - 5, 0, 0],
-                [x + 5, 0, 0],
-                [x + 5, 0, y],
-                [x - 5, 0, y],
-                [x - 5, 0, 0],
-            ])
-            cols.extend([color] * 5)
-
-        return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
+        """Store a snapshot of the current bid and ask data."""
+        # Create deep copies to ensure historical data remains unchanged
+        bid_copy = self.bid_data.copy()
+        ask_copy = self.ask_data.copy()
+        self.historical_depth.append((mid_price, bid_copy, ask_copy))
 
 
 ###############################################################################
@@ -136,97 +105,150 @@ class VaporWaveOrderBookVisualizer:
         self.view.camera.center = (0, 0, 0)
         self.view.camera.elevation = 20
         self.view.camera.fov = 60
+        self.camera_z_offset = 0
+        self.camera_y_offset = 0
+        self.wireframe_type = "rectangle"  # Initialize wireframe_type
         self._init_scene()
         self.timer = app.Timer(interval=0.1, connect=self.on_timer, start=True)
-        self.camera_z_offset = 0  # Initialize Z-axis offset
-        self.camera_y_offset = 0  # Initialize Y-axis offset
 
     def _init_scene(self):
-        """Set up the scene visuals: sun, grid, plane, wireframes, text label."""
-        self.sun = Sphere(radius=2000, method="latitude", parent=self.view.scene, color=(1.0, 0.5, 0.9, 1.0))
-        self.sun.transform = scene.transforms.STTransform(translate=(0, 8000, 800))
+        """Set up the scene visuals: sun, grid, wireframes, text labels."""
+        # Sun Sphere
+        self.sun = Sphere(radius=1000, method="latitude", parent=self.view.scene, color=(1.0, 0.5, 0.9, 1.0))
+        self.sun.transform = scene.transforms.STTransform(translate=(0, 8000, 500))
+
+        # Grid Lines
         self.grid = scene.visuals.GridLines(color=(1.0, 0.2, 1.0, 0.5), parent=self.view.scene)
+
+        # Wireframe Lines
         self.batched_wireframe = scene.visuals.Line(parent=self.view.scene)
 
+        # Current Price Label
         self.current_price_label = Text(
-            text="?",  # Placeholder
+            text="?",
             color="white",
             font_size=18,
             anchor_x="left",
             anchor_y="bottom",
-            parent=self.canvas.scene  # Overlay on 2D canvas
+            parent=self.canvas.scene
         )
         self.current_price_label.transform = scene.transforms.STTransform(translate=(10, 10))
 
-        # Connect key press events
+        # Spread Label
+        self.spread_label = Text(
+            text="Spread: ?",
+            color="white",
+            font_size=18,
+            anchor_x="left",
+            anchor_y="bottom",
+            parent=self.canvas.scene
+        )
+        self.spread_label.transform = scene.transforms.STTransform(translate=(10, 40))
+
+        # Connect key press event
         self.canvas.events.key_press.connect(self.on_key_press)
 
-
     def on_key_press(self, event):
-            """Move camera center with arrow keys and update display."""
-            step = 10  # The distance to move the camera with each key press
-            if event.key == 'Left':
-                self.camera_z_offset -= step
-            elif event.key == 'Right':
-                self.camera_z_offset += step
-            elif event.key == 'Up':
-                self.camera_y_offset += step
-            elif event.key == 'Down':
-                self.camera_y_offset -= step
-
-            # Update camera center
-            old_center = list(self.view.camera.center)
-            old_center[1] = self.camera_z_offset  # Update Z-axis offset
-            old_center[2] = self.camera_y_offset  # Update Y-axis offset
-            self.view.camera.center = tuple(old_center)
-
-            # Update the label to show the current camera offsets
-            #self.current_price_label.text = (            )
-            self.canvas.update()
+        """Handle key press events to toggle wireframe type."""
+        if event.key == "T":  # Switch to triangle or rectangle wireframe
+            if self.wireframe_type == "rectangle":
+                self.wireframe_type = "triangle"
+            else:
+                self.wireframe_type = "rectangle"
+            print(f"Wireframe type switched to: {self.wireframe_type}")
+            self.update_wireframe()  # Force update of the wireframe on toggle
 
     def on_timer(self, event):
-        """Update the scene with data changes."""
-        # Process incoming messages
+        """Called periodically; updates the scene with data changes."""
         self.data.process_messages()
-
-        # Get the mid price and record a new snapshot if there's valid data
         mid_price = self.data.get_mid_price()
         if mid_price == 0:
-            return  # Skip if no valid mid price
+            return
 
-        # Record current snapshot for active zones only
+        self.current_price_label.text = f"{mid_price:.2f}"
+        spread = self.data.get_market_spread()
+        self.spread_label.text = f"Spread: {spread:.2f}"
         self.data.record_current_snapshot(mid_price)
 
-        # Combine only active geometry from historical_depth
-        all_verts = []
-        all_cols = []
-        for i, (snap_verts, snap_cols) in enumerate(self.data.historical_depth):
-            if snap_verts.size == 0 or snap_cols.size == 0:
-                continue  # Skip empty snapshots
+        self.update_wireframe()
 
-            shifted = snap_verts.copy()
-            shifted[:, 1] += (len(self.data.historical_depth) - 1 - i) * 5  # Offset z-axis
-            all_verts.append(shifted)
-            all_cols.append(snap_cols)
+    def update_wireframe(self):
+        """Rebuild the wireframe visualization based on the current wireframe_type."""
+        verts = []
+        cols = []
+        volume_threshold = 0.5  # Threshold to filter out low-volume entries
 
-        if all_verts and all_cols:
-            merged_verts = np.concatenate(all_verts, axis=0)
-            merged_cols = np.concatenate(all_cols, axis=0)
+        # Iterate through all historical snapshots
+        for i, (mid_price, bid_data, ask_data) in enumerate(self.data.historical_depth):
+            # Offset for layering historical data
+            z_offset = (len(self.data.historical_depth) - 1 - i) * 5
+
+            # Process Bids
+            for price, volume in sorted(bid_data.items(), reverse=True)[:self.data.order_book_depth]:
+                if volume < volume_threshold:
+                    continue
+                x = mid_price - price
+                y = volume * 10
+                color = [0.0, 1.0, 0.0, 1.0]  # Green for bids
+
+                if self.wireframe_type == "rectangle":
+                    verts.extend([
+                        [x - 5, z_offset, 0],
+                        [x + 5, z_offset, 0],
+                        [x + 5, z_offset, y],
+                        [x - 5, z_offset, y],
+                        [x - 5, z_offset, 0],
+                    ])
+                    cols.extend([color] * 5)
+                elif self.wireframe_type == "triangle":
+                    verts.extend([
+                        [x - 5, z_offset, 0],
+                        [x + 5, z_offset, 0],
+                        [x, z_offset, y],
+                        [x - 5, z_offset, 0],  # Close the triangle
+                    ])
+                    cols.extend([color] * 4)
+
+            # Process Asks
+            for price, volume in sorted(ask_data.items())[:self.data.order_book_depth]:
+                if volume < volume_threshold:
+                    continue
+                x = mid_price - price
+                y = volume * 10
+                color = [1.0, 0.0, 0.0, 1.0]  # Red for asks
+
+                if self.wireframe_type == "rectangle":
+                    verts.extend([
+                        [x - 5, z_offset, 0],
+                        [x + 5, z_offset, 0],
+                        [x + 5, z_offset, y],
+                        [x - 5, z_offset, y],
+                        [x - 5, z_offset, 0],
+                    ])
+                    cols.extend([color] * 5)
+                elif self.wireframe_type == "triangle":
+                    verts.extend([
+                        [x - 5, z_offset, 0],
+                        [x + 5, z_offset, 0],
+                        [x, z_offset, y],
+                        [x - 5, z_offset, 0],  # Close the triangle
+                    ])
+                    cols.extend([color] * 4)
+
+        if verts and cols:
+            merged_verts = np.array(verts, dtype=np.float32)
+            merged_cols = np.array(cols, dtype=np.float32)
             self.batched_wireframe.set_data(pos=merged_verts, color=merged_cols)
-        else:
-            # If no data, clear the wireframe
-            self.batched_wireframe.set_data(pos=np.zeros((0, 3)), color=np.zeros((0, 4)))
 
-        # Update current price label
-        self.current_price_label.text = f"{mid_price:.2f}"
         self.canvas.update()
 
-
     def run(self):
+        """Start the Vispy event loop."""
         app.run()
 
+
 ###############################################################################
-# WebSocket
+# WebSocket Handlers
 ###############################################################################
 def on_open(ws):
     print("Authenticating with Alpaca...")
@@ -262,16 +284,27 @@ def build_websocket(data_mgr):
         on_message=data_mgr.on_message
     )
 
+
 ###############################################################################
-# Main
+# Main Execution
 ###############################################################################
 def main():
     load_dotenv()
+
+    # Verify that Alpaca API credentials are set
+    api_key = os.getenv('ALPACA_PAPER_API_KEY')
+    api_secret = os.getenv('ALPACA_PAPER_API_SECRET')
+
+    if not api_key or not api_secret:
+        print("Error: Alpaca API credentials not found in environment variables.")
+        return
+
     data_mgr = DataManager(max_snapshots=500, order_book_depth=1000)
     viz = VaporWaveOrderBookVisualizer(data_mgr)
     ws = build_websocket(data_mgr)
     threading.Thread(target=ws.run_forever, daemon=True).start()
     viz.run()
+
 
 if __name__ == "__main__":
     main()
