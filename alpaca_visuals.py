@@ -83,13 +83,15 @@ class DataManager:
         verts, cols = self.build_wireframe_geometry(mid_price)
         self.historical_depth.append((verts, cols))
 
-    def build_wireframe_geometry(self, mid_price):
-        """Create vertices and colors for the current snapshot."""
+    def build_wireframe_geometry(self, mid_price, volume_threshold=0.5):
+        """Create vertices and colors for the current snapshot, filtering low-volume data."""
         verts = []
         cols = []
 
         # Bids
         for price, volume in sorted(self.bid_data.items(), reverse=True)[:self.order_book_depth]:
+            if volume < volume_threshold:
+                continue  # Skip low-volume bids
             x = mid_price - price
             y = volume * 10
             color = [0.0, 1.0, 0.0, 1.0]  # Green
@@ -104,6 +106,8 @@ class DataManager:
 
         # Asks
         for price, volume in sorted(self.ask_data.items())[:self.order_book_depth]:
+            if volume < volume_threshold:
+                continue  # Skip low-volume asks
             x = mid_price - price
             y = volume * 10
             color = [1.0, 0.0, 0.0, 1.0]  # Red
@@ -117,6 +121,7 @@ class DataManager:
             cols.extend([color] * 5)
 
         return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
+
 
 ###############################################################################
 # VaporWaveOrderBookVisualizer: Builds the scene and updates from DataManager
@@ -180,39 +185,42 @@ class VaporWaveOrderBookVisualizer:
             self.canvas.update()
 
     def on_timer(self, event):
-        """Called periodically; updates the scene with data changes."""
+        """Update the scene with data changes."""
         # Process incoming messages
         self.data.process_messages()
 
         # Get the mid price and record a new snapshot if there's valid data
         mid_price = self.data.get_mid_price()
-        if mid_price == 0:  # Skip if there's no valid mid price
-            return
+        if mid_price == 0:
+            return  # Skip if no valid mid price
 
-        self.current_price_label.text = f"{mid_price:.2f}"  # Updated price with 2 decimal places
-
-
+        # Record current snapshot for active zones only
         self.data.record_current_snapshot(mid_price)
 
-        # Combine geometry from historical_depth with Z-offset
+        # Combine only active geometry from historical_depth
         all_verts = []
         all_cols = []
         for i, (snap_verts, snap_cols) in enumerate(self.data.historical_depth):
-            if snap_verts.size == 0 or snap_cols.size == 0:  # Skip empty snapshots
-                continue
+            if snap_verts.size == 0 or snap_cols.size == 0:
+                continue  # Skip empty snapshots
+
             shifted = snap_verts.copy()
-            shifted[:, 1] += (len(self.data.historical_depth) - 1 - i) * 5  # Offset in Z (third) axis
+            shifted[:, 1] += (len(self.data.historical_depth) - 1 - i) * 5  # Offset z-axis
             all_verts.append(shifted)
             all_cols.append(snap_cols)
 
-        # Ensure there is data to visualize
         if all_verts and all_cols:
             merged_verts = np.concatenate(all_verts, axis=0)
             merged_cols = np.concatenate(all_cols, axis=0)
             self.batched_wireframe.set_data(pos=merged_verts, color=merged_cols)
+        else:
+            # If no data, clear the wireframe
+            self.batched_wireframe.set_data(pos=np.zeros((0, 3)), color=np.zeros((0, 4)))
 
-        # Update the canvas
+        # Update current price label
+        self.current_price_label.text = f"{mid_price:.2f}"
         self.canvas.update()
+
 
     def run(self):
         app.run()
