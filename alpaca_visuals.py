@@ -15,7 +15,7 @@ import time  # Added for timestamp handling
 # DataManager: Manages incoming order book data, stores bids/asks, provides geometry
 ###############################################################################
 class DataManager:
-    def __init__(self, max_snapshots=250, order_book_depth=500):
+    def __init__(self, max_snapshots=100, order_book_depth=200):
         self.max_snapshots = max_snapshots
         self.order_book_depth = order_book_depth
         self.bid_data = {}
@@ -114,7 +114,7 @@ class VaporWaveOrderBookVisualizer:
         self.camera_y_offset = 0
         self.wireframe_type = "rectangle"  # Initialize wireframe_type
         self._init_scene()
-        self.timer = app.Timer(interval=0.01, connect=self.on_timer, start=True)
+        self.timer = app.Timer(interval=0.1, connect=self.on_timer, start=True)
 
         # Initialize FPS tracking
         self.frame_times = deque(maxlen=100)  # Stores timestamps of recent frames
@@ -173,7 +173,7 @@ class VaporWaveOrderBookVisualizer:
             anchor_y="bottom",
             parent=self.canvas.scene,
         )
-        self.fps_label.transform = scene.transforms.STTransform(translate=(10, 200))
+        self.fps_label.transform = scene.transforms.STTransform(translate=(10, 565))
 
         # Connect key press event
         self.canvas.events.key_press.connect(self.on_key_press)
@@ -212,13 +212,15 @@ class VaporWaveOrderBookVisualizer:
         self.spread_label.text = f"Spread: {spread:.2f}"
         self.data.record_current_snapshot(mid_price)
 
-        self.update_wireframe()
+        # Update wireframe less frequently
+        if len(self.frame_times) % 10 == 0:
+            self.update_wireframe()
 
     def update_wireframe(self):
         """Rebuild the wireframe visualization based on the current wireframe_type."""
         verts = []
         cols = []
-        volume_threshold = 0.5  # Threshold to filter out low-volume entries
+        volume_threshold = 0  # Threshold to filter out low-volume entries
 
         # Iterate through all historical snapshots
         for i, (mid_price, bid_data, ask_data) in enumerate(self.data.historical_depth):
