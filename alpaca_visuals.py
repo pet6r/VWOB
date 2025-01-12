@@ -10,6 +10,7 @@ import os
 from vispy import app, scene
 from vispy.scene.visuals import Text, Sphere, Image
 import time  # Added for timestamp handling
+import signal  # Added for signal handling
 
 ###############################################################################
 # DataManager: Manages incoming order book data, stores bids/asks, provides geometry
@@ -24,6 +25,12 @@ class DataManager:
         self.historical_depth = deque(maxlen=self.max_snapshots)
         self.message_queue = Queue()
         self.last_message_time = 0  # Added to track the timestamp of the last message
+
+    def save_snapshots_to_file(self, filename):
+        """Save the historical snapshots to a file."""
+        with open(filename, 'w') as f:
+            json.dump(list(self.historical_depth), f)
+        print(f"Snapshots saved to {filename}")
 
     def on_message(self, ws, raw_message):
         """Callback from WebSocket, push raw message to queue."""
@@ -94,6 +101,11 @@ class DataManager:
         ask_copy = self.ask_data.copy()
         self.historical_depth.append((mid_price, bid_copy, ask_copy))
 
+    def save_snapshots_to_file(self, filename):
+        """Save the historical snapshots to a file."""
+        with open(filename, 'w') as f:
+            json.dump(list(self.historical_depth), f)
+        print(f"Snapshots saved to {filename}")
 
 ###############################################################################
 # VaporWaveOrderBookVisualizer: Builds the scene and updates from DataManager
@@ -336,9 +348,11 @@ def build_websocket(data_mgr):
     )
 
 
+
 ###############################################################################
 # Main Execution
 ###############################################################################
+
 def main():
     load_dotenv()
 
@@ -353,9 +367,19 @@ def main():
     data_mgr = DataManager(max_snapshots=200, order_book_depth=500)
     viz = VaporWaveOrderBookVisualizer(data_mgr)
     ws = build_websocket(data_mgr)
+
+    # Define a signal handler to close the WebSocket connection and save snapshots
+    def signal_handler(sig, frame):
+        print("Signal received, closing WebSocket connection and saving snapshots...")
+        ws.close()
+        data_mgr.save_snapshots_to_file('order_book_snapshots.json')
+        app.quit()  # Ensure the Vispy event loop is also stopped
+
+    # Register the signal handler for SIGINT (Ctrl+C)
+    signal.signal(signal.SIGINT, signal_handler)
+
     threading.Thread(target=ws.run_forever, daemon=True).start()
     viz.run()
-
 
 if __name__ == "__main__":
     main()
