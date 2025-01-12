@@ -182,3 +182,8 @@ auth_ws.py
 subscribe.py
 subscribe_ack.py
 binance_ws.py
+
+# Folders 
+
+kraken_data/*
+alpaca_data/*

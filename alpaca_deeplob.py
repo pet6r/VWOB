@@ -38,6 +38,7 @@ except Exception as e:
     print(f"Failed to set EGL backend: {e}")
     current_backend = "unknown"
 
+
 # Import TensorFlow
 import tensorflow as tf
 from tensorflow.keras.models import Model
@@ -68,15 +69,18 @@ print(f"TensorFlow version: {tf.__version__}")
 print(f"GPU Available: {tf.config.list_physical_devices('GPU')}")
 print(f"CUDA Available: {tf.test.is_built_with_cuda()}")
 
-# Configure GPU
-gpus = tf.config.list_physical_devices("GPU")
+# GPU usage
+gpus = tf.config.list_physical_devices('GPU')
 if gpus:
     try:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        print("GPU memory growth enabled")
+        # Set memory limit to 4GB (4096 MB)
+        tf.config.set_logical_device_configuration(
+            gpus[0],
+            [tf.config.LogicalDeviceConfiguration(memory_limit=4096)]  # Adjust this number for more/less memory
+        )
+        print("GPU memory limit set to 4GB")
     except RuntimeError as e:
-        print(f"Memory growth setting failed: {e}")
+        print(f"Error setting GPU memory limit: {e}")
 
 
 def create_deeplob(input_shape):
@@ -788,7 +792,272 @@ def check_backend_availability():
         except Exception as e:
             print(f"Backend {backend}: Not available ({str(e)})")
 
+class OrderBookAnalyzer:
+    def __init__(self, data_manager, model=None):
+        print("Initializing analyzer...")
+        self.data = data_manager
+        self.model = model
+        self.min_samples_for_training = 1000
 
+        # Initialize tracking variables
+        self.prediction_history = deque(maxlen=100)
+        self.last_prediction_time = time.time()
+        self.prediction_interval = 1.0  # Make prediction every second
+        self.last_prediction_confidence = None
+
+
+        # Initialize GPU monitoring
+        self.last_gpu_check = time.time()
+        self.gpu_check_interval = 5
+
+        # Set up timer for periodic updates
+        self.running = True
+        print("Setup complete!")
+
+    def prepare_prediction_input(self):
+            """Prepare input data for model prediction"""
+            try:
+                if len(self.data.historical_depth) < 100:
+                    return None
+
+                input_data = []
+                snapshots = list(self.data.historical_depth)[-100:]  # Get last 100 snapshots
+
+                for _, bids, asks in snapshots:
+                    snapshot_data = []
+
+                    # Process bids
+                    bid_prices = sorted(bids.keys(), reverse=True)[:20]
+                    for price in bid_prices:
+                        snapshot_data.append([float(price), float(bids[price])])
+
+                    # Pad bids if necessary
+                    while len(snapshot_data) < 20:
+                        snapshot_data.append([0.0, 0.0])
+
+                    # Process asks
+                    ask_prices = sorted(asks.keys())[:20]
+                    for price in ask_prices:
+                        snapshot_data.append([float(price), float(asks[price])])
+
+                    # Pad asks if necessary
+                    while len(snapshot_data) < 40:  # Total should be 40 (20 bids + 20 asks)
+                        snapshot_data.append([0.0, 0.0])
+
+                    input_data.append(snapshot_data)
+
+                return np.array([input_data])  # Shape: (1, 100, 40, 2)
+
+            except Exception as e:
+                print(f"Error preparing prediction input: {e}")
+                return None
+
+    def log_trading_info(self, mid_price, spread, prediction=None):
+        """Log trading information to console"""
+        current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        # Clear screen for better visibility
+        print("\033[H\033[J")  # Clear screen
+
+        print(f"=== Trading Update ({current_time}) ===")
+
+        # Show data collection progress
+        snapshots_needed = 100
+        current_snapshots = len(self.data.historical_depth)
+        if current_snapshots < snapshots_needed:
+            progress = (current_snapshots / snapshots_needed) * 100
+            print(f"Collecting data: {current_snapshots}/{snapshots_needed} snapshots ({progress:.1f}%)")
+            print(f"Time until predictions: ~{(snapshots_needed - current_snapshots) * 5} seconds")
+            print()
+
+        print(f"Current Price: ${mid_price:,.2f} ", end="")
+
+        # Calculate and show price change if we have previous data
+        if len(self.data.historical_depth) > 1:
+            previous_price = list(self.data.historical_depth)[-2][0]
+            price_change = mid_price - previous_price
+            price_change_pct = (price_change / previous_price) * 100
+            change_color = "\033[92m" if price_change > 0 else "\033[91m"  # Green/Red
+            print(f"{change_color}({price_change:+.2f} | {price_change_pct:+.2f}%)\033[0m")
+        else:
+            print("(first snapshot)")
+
+        print(f"Spread: ${spread:,.2f} ({(spread/mid_price)*100:.3f}% of price)")
+
+        if prediction is not None:
+            prediction_map = {0: "Down ⬇️", 1: "Stable ➡️", 2: "Up ⬆️"}
+            confidence = self.last_prediction_confidence if hasattr(self, 'last_prediction_confidence') else None
+            conf_str = f" ({confidence:.1%})" if confidence is not None else ""
+            print(f"\nPrediction: {prediction_map[prediction]}{conf_str}")
+        elif current_snapshots >= snapshots_needed:
+            print("\nPrediction: Calculating...")
+
+        # Market depth information
+        if self.data.historical_depth:
+            latest_snapshot = list(self.data.historical_depth)[-1]
+            print("\nMarket Depth:")
+            print(f"Bid Levels: {len(latest_snapshot[1])} ({sum(latest_snapshot[1].values()):,.2f} BTC)")
+            print(f"Ask Levels: {len(latest_snapshot[2])} ({sum(latest_snapshot[2].values()):,.2f} BTC)")
+
+            # Calculate book imbalance
+            total_bids = sum(latest_snapshot[1].values())
+            total_asks = sum(latest_snapshot[2].values())
+            imbalance = (total_bids - total_asks) / (total_bids + total_asks)
+            imbalance_color = "\033[92m" if imbalance > 0 else "\033[91m"
+            print(f"Book Imbalance: {imbalance_color}{imbalance:+.2%}\033[0m")
+
+        # Add volatility if we have enough data
+        if len(self.data.historical_depth) > 10:
+            history_list = list(self.data.historical_depth)
+            recent_prices = [price for price, _, _ in history_list[-10:]]
+            volatility = np.std(recent_prices) / np.mean(recent_prices) * 100
+            print(f"\nVolatility (10 periods): {volatility:.2f}%")
+
+        print("\nPrediction History:")
+        if self.prediction_history:
+            prediction_map = {0: "⬇️", 1: "➡️", 2: "⬆️"}
+            history_str = " ".join(prediction_map[p] for p in list(self.prediction_history)[-10:])
+            print(f"Last 10: {history_str}")
+        else:
+            print("No predictions yet")
+
+        print("=" * 50 + "\n")
+
+    def save_trading_data(self, filename="trading_data.json"):
+        """Save trading data to file"""
+        try:
+            # Convert numpy types to native Python types
+            def convert_to_native_types(obj):
+                if isinstance(obj, (np.integer, np.int64, np.int32)):
+                    return int(obj)
+                elif isinstance(obj, (np.floating, np.float64, np.float32)):
+                    return float(obj)
+                elif isinstance(obj, (np.ndarray,)):
+                    return obj.tolist()
+                return obj
+
+            data = {
+                "timestamp": float(time.time()),
+                "predictions": [convert_to_native_types(p) for p in list(self.prediction_history)],
+                "prices": [(float(time.time()), float(price)) for price, _, _ in self.data.historical_depth],
+                "latest_price": float(self.data.get_mid_price()),
+                "latest_spread": float(self.data.get_market_spread())
+            }
+
+            # Add market stats
+            if self.data.historical_depth:
+                latest_snapshot = list(self.data.historical_depth)[-1]
+                data["market_stats"] = {
+                    "bid_levels": int(len(latest_snapshot[1])),
+                    "ask_levels": int(len(latest_snapshot[2])),
+                    "total_bid_volume": float(sum(latest_snapshot[1].values())),
+                    "total_ask_volume": float(sum(latest_snapshot[2].values()))
+                }
+
+            with open(filename, "w") as f:
+                json.dump(data, f, indent=2)
+                print(f"Trading data saved to {filename}")
+
+        except Exception as e:
+            print(f"Error saving trading data: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def make_prediction(self):
+        """Make a prediction using the current order book state"""
+        if not self.model:
+            return None
+
+        try:
+            model_input = self.prepare_prediction_input()
+            if model_input is None:
+                return None
+
+            # Make prediction
+            prediction = self.model.predict(model_input, verbose=0)
+            prediction_class = np.argmax(prediction[0])
+
+            # Store prediction confidence
+            self.last_prediction_confidence = float(np.max(prediction[0]))
+
+            # Store prediction
+            self.prediction_history.append(int(prediction_class))
+
+            return prediction_class
+
+        except Exception as e:
+            print(f"Prediction error: {e}")
+            return None
+
+    def run(self):
+        """Main loop for analysis"""
+        last_save_time = time.time()
+        save_interval = 60  # Save data every minute
+        update_interval = 5  # Update every 5 seconds
+
+        try:
+            while self.running:
+                current_time = time.time()
+
+                # Make predictions and update display periodically
+                if current_time - self.last_prediction_time > update_interval:
+                    self.data.process_messages()
+                    mid_price = self.data.get_mid_price()
+
+                    if mid_price > 0:
+                        spread = self.data.get_market_spread()
+
+                        # Make prediction if we have enough data
+                        prediction = None
+                        if len(self.data.historical_depth) >= 100:
+                            prediction = self.make_prediction()
+                            if prediction is not None:
+                                # Store prediction confidence
+                                model_input = self.prepare_prediction_input()
+                                if model_input is not None:
+                                    pred_probabilities = self.model.predict(model_input, verbose=0)
+                                    self.last_prediction_confidence = np.max(pred_probabilities[0])
+
+                        # Log information
+                        self.log_trading_info(mid_price, spread, prediction)
+
+                        # Save data periodically
+                        if current_time - last_save_time > save_interval:
+                            filename = f"alpaca_data/trading_data_{int(current_time)}.json"
+                            self.save_trading_data(filename)
+                            last_save_time = current_time
+
+                        # Record snapshot
+                        self.data.record_current_snapshot(mid_price)
+
+                    self.last_prediction_time = current_time
+
+                # Monitor GPU usage
+                if current_time - self.last_gpu_check > self.gpu_check_interval:
+                    if tf.config.list_physical_devices('GPU'):
+                        try:
+                            bytes_in_use = tf.config.experimental.get_memory_usage('GPU:0')
+                            print(f"GPU Memory in use: {bytes_in_use / (1024 * 1024):.1f} MB")
+                        except Exception:
+                            print("Basic GPU monitoring: Active")
+                    self.last_gpu_check = current_time
+
+                # Small sleep to prevent CPU overuse
+                time.sleep(0.1)
+
+        except KeyboardInterrupt:
+            print("\nStopping analysis gracefully...")
+        except Exception as e:
+            print(f"Error in analysis loop: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                final_filename = f"alpaca_data/final_trading_data_{int(time.time())}.json"
+                self.save_trading_data(final_filename)
+                print(f"Final data saved to {final_filename}")
+            except Exception as e:
+                print(f"Error saving final data: {e}")
 ###############################################################################
 # Main Execution
 ###############################################################################
@@ -798,7 +1067,7 @@ def main():
     load_dotenv()
 
     # Create directories
-    os.makedirs("snapshots", exist_ok=True)
+    os.makedirs("data", exist_ok=True)
     os.makedirs("weights", exist_ok=True)
 
     # Verify credentials
@@ -809,26 +1078,39 @@ def main():
         print("Error: Alpaca API credentials not found")
         return
 
+    print("\nInitializing application...")
+
     # Initialize model
+    print("Creating model...")
     input_shape = (100, 40, 2)
     model = create_deeplob(input_shape)
-    load_model_weights(model)  # Try to load saved weights
+    load_model_weights(model)
 
+    print("Setting up data manager...")
     data_mgr = DataManager(max_snapshots=200, order_book_depth=500)
-    viz = VaporWaveOrderBookVisualizer(data_mgr, model=model)  # Pass the model here
+
+    print("Creating analyzer...")
+    analyzer = OrderBookAnalyzer(data_mgr, model=model)
+
+    print("Setting up WebSocket...")
     ws = build_websocket(data_mgr)
 
     def signal_handler(sig, frame):
         print("\nShutting down...")
+        analyzer.stop()
         ws.close()
-        data_mgr.save_snapshots_to_file("snapshots/order_book_snapshots.json")
-        app.quit()
+        data_mgr.save_snapshots_to_file("data/final_snapshot.json")
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    threading.Thread(target=ws.run_forever, daemon=True).start()
-    viz.run()
+    print("\nStarting application...")
 
+    # Start WebSocket in a separate thread
+    ws_thread = threading.Thread(target=ws.run_forever, daemon=True)
+    ws_thread.start()
+
+    # Run the analyzer
+    analyzer.run()
 
 if __name__ == "__main__":
     main()
