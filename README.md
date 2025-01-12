@@ -13,5 +13,5 @@ Alpaca requires an apikey and secret to be set in an .env file
 # Dependencies
 
 ```bash
-pip install PyQt5 vispy websocket-client numpy
+pip install PyQt5 vispy websocket-client numpy python-dotenv
 ```

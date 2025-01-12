@@ -370,6 +370,7 @@ class VaporWaveOrderBookVisualizer:
 # WebSocket
 ###############################################################################
 def on_open(ws):
+    print("Authencating with Kraken")
     subscription = {
         "event": "subscribe",
         "pair": ["BTC/USDT"],
