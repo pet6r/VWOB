@@ -15,3 +15,12 @@ Alpaca requires an apikey and secret to be set in an .env file
 ```bash
 pip install PyQt5 vispy websocket-client numpy python-dotenv
 ```
+
+# For CNN model fun
+
+```bash
+pip install tensorflow keras sklearn tensorflow[and-cuda]
+```
+
+https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local
+https://www.tensorflow.org/install/pip
