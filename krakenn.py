@@ -8,13 +8,10 @@ from queue import Queue
 import logging
 import time
 import signal
+import psutil
 
 # Suppress TensorFlow warnings and errors
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging (0 = all logs, 1 = INFO, 2 = WARNING, 3 = ERROR)
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Import TensorFlow
 import tensorflow as tf
@@ -31,11 +28,6 @@ from tensorflow.keras.layers import (
 )
 from tensorflow.keras.utils import to_categorical
 
-# Import other dependencies
-from sklearn.model_selection import train_test_split
-import websocket
-from dotenv import load_dotenv
-
 # Configure GPU
 gpus = tf.config.list_physical_devices('GPU')
 if gpus:
@@ -47,6 +39,33 @@ if gpus:
         print("GPU memory limit set to 4GB")
     except RuntimeError as e:
         print(f"Error setting GPU memory limit: {e}")
+
+# Set up logging
+from rich.logging import RichHandler
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.table import Table
+
+console = Console()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(message)s",
+    handlers=[
+        RichHandler(
+            rich_tracebacks=True,
+            markup=True,
+            show_time=True,
+            show_path=False,
+            show_level=False
+        )
+    ]
+)
+logger = logging.getLogger("rich")
+
+# Import other dependencies
+from sklearn.model_selection import train_test_split
+import websocket
+from dotenv import load_dotenv
 
 def create_deeplob(input_shape):
     """Create the DeepLOB model architecture"""
@@ -90,9 +109,10 @@ def create_deeplob(input_shape):
 
 def load_model_weights(model, weights_path="weights/model_checkpoint"):
     """Load pre-trained weights if available"""
-    if os.path.exists(weights_path + ".index"):
+    weights_file = f"{weights_path}.weights.h5"
+    if os.path.exists(weights_file):
         logger.info("Loading saved weights...")
-        model.load_weights(weights_path)
+        model.load_weights(weights_file)
         return True
     logger.info("No pre-trained weights found.")
     return False
@@ -309,14 +329,90 @@ class OrderBookAnalyzer:
         self.last_performance_check = time.time()
         self.performance_check_interval = 60  # Check performance every minute
 
+        # Add checkpoint settings
+        self.checkpoint_dir = "weights"
+        self.best_accuracy = 0.0
+        self.checkpoint_interval = 100  # Save every 100 predictions
+        self.prediction_count = 0
+
+        # Add PnL tracking
+        self.initial_price = None
+        self.total_pnl = 0.0
+        self.trades = []
+
+        # ... existing initialization ...
+        self.trades_won = 0
+        self.total_trades = 0
+        self.winning_streak = 0
+        self.longest_winning_streak = 0
+        self.current_streak = 0
+
         # Runtime control
         self.running = True
         logger.info("Analyzer initialization complete")
 
+    def track_pnl(self, current_price):
+        """Track profit/loss from predictions"""
+        if self.initial_price is None:
+            self.initial_price = current_price
+            return
+
+        if len(self.prediction_history) > 0:
+            last_pred = self.prediction_history[-1]
+            price_change = current_price - self.initial_price
+
+            if last_pred == 2 and price_change > 0:  # Correct UP prediction
+                self.total_pnl += abs(price_change)
+            elif last_pred == 0 and price_change < 0:  # Correct DOWN prediction
+                self.total_pnl += abs(price_change)
+
+            self.trades.append({
+                'timestamp': time.time(),
+                'price': current_price,
+                'prediction': ['DOWN', 'STABLE', 'UP'][last_pred],
+                'price_change': price_change,
+                'running_pnl': self.total_pnl
+            })
+
+    def analyze_market_trend(self):
+        """Analyze market trend over different timeframes"""
+        try:
+            if len(self.data.historical_depth) < 50:
+                return
+
+            prices = [price for price, _, _ in self.data.historical_depth]
+
+            # Short-term trend (last 10 snapshots)
+            short_term = np.mean(prices[-10:]) - np.mean(prices[-20:-10])
+
+            # Medium-term trend (last 50 snapshots)
+            medium_term = np.mean(prices[-25:]) - np.mean(prices[-50:-25])
+
+            logger.info("\nMarket Trend Analysis:")
+            logger.info(f"Short-term trend: {'UP' if short_term > 0 else 'DOWN'} ({abs(short_term):.2f})")
+            logger.info(f"Medium-term trend: {'UP' if medium_term > 0 else 'DOWN'} ({abs(medium_term):.2f})")
+
+        except Exception as e:
+            logger.error(f"Error analyzing market trend: {e}")
+
+    def save_model_weights(self, checkpoint_name="latest"):
+        """Save model weights"""
+        try:
+            # Ensure checkpoint directory exists
+            os.makedirs(self.checkpoint_dir, exist_ok=True)
+
+            # Add the required .weights.h5 extension
+            filepath = os.path.join(self.checkpoint_dir, f"model_checkpoint_{checkpoint_name}.weights.h5")
+            self.model.save_weights(filepath)
+            logger.info(f"✅ Model weights saved to {filepath}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error saving model weights: {e}")
+            return False
+
     def make_prediction(self):
         """Make price movement prediction"""
         try:
-            # Check if we have enough data
             if len(self.data.historical_depth) < self.min_samples_for_training:
                 logger.info(f"Collecting data: {len(self.data.historical_depth)}/{self.min_samples_for_training} snapshots")
                 return None
@@ -336,15 +432,26 @@ class OrderBookAnalyzer:
             self.prediction_history.append(prediction_class)
             self.last_prediction_confidence = float(confidence)
 
-            # Log prediction
+            # Get detailed prediction probabilities
             direction_map = {0: "DOWN", 1: "STABLE", 2: "UP"}
-            logger.info(
-                f"Prediction: {direction_map[prediction_class]} "
-                f"(Confidence: {confidence:.2%})"
-            )
+            probabilities = {direction_map[i]: float(prediction[0][i]) for i in range(3)}
 
-            # Monitor performance after each prediction
-            self.monitor_performance()
+            # Log detailed prediction information
+            logger.info("\n" + "-" * 50)
+            logger.info("Prediction Details:")
+            logger.info(f"Direction: {direction_map[prediction_class]} ({confidence:.1%})")
+            logger.info("Probabilities:")
+            for direction, prob in probabilities.items():
+                logger.info(f"  {direction}: {prob:.1%}")
+
+            # Get price movement since last prediction
+            if len(self.data.historical_depth) >= 2:
+                last_two_prices = [price for price, _, _ in list(self.data.historical_depth)[-2:]]
+                price_change = (last_two_prices[1] - last_two_prices[0])
+                price_change_pct = (price_change / last_two_prices[0]) * 100
+                logger.info(f"Price Change: ${price_change:.2f} ({price_change_pct:+.3f}%)")
+
+            logger.info("-" * 50)
 
             return prediction_class
 
@@ -361,7 +468,7 @@ class OrderBookAnalyzer:
             # Get the last prediction and actual price movement
             last_prediction = self.prediction_history[-1]
 
-            # Get the last two prices
+            # Calculate actual movement from recent prices
             recent_prices = [price for price, _, _ in list(self.data.historical_depth)[-2:]]
             actual_movement = 1  # STABLE
             if recent_prices[-1] > recent_prices[-2]:
@@ -373,29 +480,104 @@ class OrderBookAnalyzer:
             correct = (last_prediction == actual_movement)
             self.prediction_accuracy.append(correct)
 
-            # Calculate accuracy
+            # Update win rate statistics
+            self.total_trades += 1
+            if correct:
+                self.trades_won += 1
+                self.current_streak += 1
+                if self.current_streak > self.longest_winning_streak:
+                    self.longest_winning_streak = self.current_streak
+            else:
+                self.current_streak = 0
+
+            # Calculate and log performance metrics
             if self.prediction_accuracy:
                 accuracy = sum(self.prediction_accuracy) / len(self.prediction_accuracy)
-                logger.info(f"Prediction Accuracy (last {len(self.prediction_accuracy)} predictions): {accuracy:.2%}")
+                win_rate = (self.trades_won / self.total_trades) if self.total_trades > 0 else 0
 
-                # Log detailed performance
-                predictions_count = len(self.prediction_accuracy)
-                correct_count = sum(self.prediction_accuracy)
-                logger.info(f"Correct predictions: {correct_count}/{predictions_count}")
+                # Create detailed performance log
+                logger.info("\nPerformance Update:")
+                logger.info(f"Overall Accuracy: {accuracy:.2%}")
+                logger.info(f"Win Rate: {win_rate:.2%}")
+                logger.info(f"Trades Won: {self.trades_won}/{self.total_trades}")
+                logger.info(f"Current Streak: {self.current_streak}")
+                logger.info(f"Longest Winning Streak: {self.longest_winning_streak}")
+                logger.info(f"Recent Prediction: {'Correct ✅' if correct else 'Incorrect ❌'}")
 
-                # Log movement distribution
+                # Calculate rolling accuracy (last 10 predictions)
+                recent_accuracy = sum(list(self.prediction_accuracy)[-10:]) / min(10, len(self.prediction_accuracy))
+                logger.info(f"Recent Accuracy (last 10): {recent_accuracy:.2%}")
+
+                # Direction distribution
                 movement_counts = {
                     "DOWN": sum(1 for p in self.prediction_history if p == 0),
                     "STABLE": sum(1 for p in self.prediction_history if p == 1),
                     "UP": sum(1 for p in self.prediction_history if p == 2)
                 }
-                logger.info("Prediction Distribution:")
+
+                logger.info("\nPrediction Distribution:")
                 for direction, count in movement_counts.items():
                     percentage = (count / len(self.prediction_history)) * 100
                     logger.info(f"{direction}: {count} ({percentage:.1f}%)")
 
+                # Log actual vs predicted
+                logger.info(f"\nLast Prediction vs Actual:")
+                logger.info(f"Predicted: {['DOWN', 'STABLE', 'UP'][last_prediction]}")
+                logger.info(f"Actual: {['DOWN', 'STABLE', 'UP'][actual_movement]}")
+
+                price_change = recent_prices[-1] - recent_prices[-2]
+                price_change_pct = (price_change / recent_prices[-2]) * 100
+                logger.info(f"Price Change: ${price_change:.2f} ({price_change_pct:+.3f}%)")
+
+                logger.info("-" * 50)
+
         except Exception as e:
             logger.error(f"Error monitoring performance: {e}")
+
+    def log_market_conditions(self):
+        """Log detailed market conditions"""
+        try:
+            if not self.data.historical_depth:
+                return
+
+            latest_data = list(self.data.historical_depth)[-1]
+            mid_price = latest_data[0]
+            bids = latest_data[1]
+            asks = latest_data[2]
+
+            logger.info("\nMarket Conditions:")
+            logger.info(f"Current Price: ${mid_price:,.2f}")
+
+            # Volume analysis
+            total_bid_volume = sum(bids.values())
+            total_ask_volume = sum(asks.values())
+            volume_imbalance = (total_bid_volume - total_ask_volume) / (total_bid_volume + total_ask_volume)
+
+            logger.info(f"Bid Volume: {total_bid_volume:.4f} BTC")
+            logger.info(f"Ask Volume: {total_ask_volume:.4f} BTC")
+            logger.info(f"Volume Imbalance: {volume_imbalance:+.2%}")
+
+            # Order book depth
+            logger.info(f"Bid Levels: {len(bids)}")
+            logger.info(f"Ask Levels: {len(asks)}")
+
+            # Price levels analysis
+            top_bids = sorted(bids.items(), reverse=True)[:5]
+            top_asks = sorted(asks.items())[:5]
+
+            logger.info("\nTop 5 Bid Levels:")
+            for price, volume in top_bids:
+                logger.info(f"${price:,.2f}: {volume:.4f} BTC")
+
+            logger.info("\nTop 5 Ask Levels:")
+            for price, volume in top_asks:
+                logger.info(f"${price:,.2f}: {volume:.4f} BTC")
+
+            logger.info("-" * 50)
+
+        except Exception as e:
+            logger.error(f"Error logging market conditions: {e}")
+
 
     def log_trading_info(self, mid_price, spread):
         """Log current trading information"""
@@ -411,15 +593,15 @@ class OrderBookAnalyzer:
                 minutes = time_remaining // 60
                 seconds = time_remaining % 60
 
-                print(f"\nCollecting Data: {current_samples}/{self.min_samples_for_training} ({progress:.1f}%)")
-                print(f"Time until predictions: ~{minutes:.0f}m {seconds:.0f}s")
+                console.print(f"\n[bold yellow]Collecting Data: {current_samples}/{self.min_samples_for_training} ({progress:.1f}%)[/bold yellow]")
+                console.print(f"[bold yellow]Time until predictions: ~{minutes:.0f}m {seconds:.0f}s[/bold yellow]")
                 return
 
             # Basic price info
             info = [
-                f"\nTime: {current_time}",
-                f"Price: ${mid_price:,.2f}",
-                f"Spread: ${spread:,.2f} ({(spread/mid_price)*100:.3f}%)"
+                f"\n[bold cyan]Time: {current_time}[/bold cyan]",
+                f"[bold cyan]Price: ${mid_price:,.2f}[/bold cyan]",
+                f"[bold cyan]Spread: ${spread:,.2f} ({(spread/mid_price)*100:.3f}%)[/bold cyan]"
             ]
 
             # Add market depth info
@@ -429,25 +611,25 @@ class OrderBookAnalyzer:
                 total_asks = sum(latest[2].values())
 
                 info.extend([
-                    f"Bid Volume: {total_bids:.4f} BTC",
-                    f"Ask Volume: {total_asks:.4f} BTC",
+                    f"[bold cyan]Bid Volume: {total_bids:.4f} BTC[/bold cyan]",
+                    f"[bold cyan]Ask Volume: {total_asks:.4f} BTC[/bold cyan]",
                 ])
 
                 # Calculate imbalance
                 if total_bids + total_asks > 0:
                     imbalance = (total_bids - total_asks) / (total_bids + total_asks)
-                    info.append(f"Book Imbalance: {imbalance:+.2%}")
+                    info.append(f"[bold cyan]Book Imbalance: {imbalance:+.2%}[/bold cyan]")
 
             # Add prediction if available
             if self.prediction_history:
                 last_pred = self.prediction_history[-1]
                 pred_map = {0: "⬇️", 1: "➡️", 2: "⬆️"}
                 conf_str = f" ({self.last_prediction_confidence:.1%})" if self.last_prediction_confidence else ""
-                info.append(f"Last Prediction: {pred_map[last_pred]}{conf_str}")
+                info.append(f"[bold cyan]Last Prediction: {pred_map[last_pred]}{conf_str}[/bold cyan]")
 
             # Print all info
-            print("\n".join(info))
-            print("-" * 50)
+            console.print("\n".join(info))
+            console.print("[bold cyan]" + "-" * 50 + "[/bold cyan]")
 
         except Exception as e:
             logger.error(f"Error logging trading info: {e}")
@@ -500,8 +682,16 @@ class OrderBookAnalyzer:
     def run(self):
         """Main analysis loop"""
         last_save_time = time.time()
-        save_interval = 60  # Save every minute
+        last_weight_save_time = time.time()
+        last_performance_check = time.time()
+
+        save_interval = 60  # Save trading data every minute
+        weight_save_interval = 300  # Save weights every 5 minutes
         update_interval = 10  # Match snapshot interval
+        performance_check_interval = 60  # Check performance every minute
+
+        prediction_count = 0
+        best_accuracy = 0.0
 
         try:
             while self.running:
@@ -513,31 +703,131 @@ class OrderBookAnalyzer:
 
                     if mid_price > 0:
                         spread = self.data.get_market_spread()
+                        current_samples = len(self.data.historical_depth)
 
                         # Log current state
                         self.log_trading_info(mid_price, spread)
 
-                        # Only make predictions if we have enough data
-                        if len(self.data.historical_depth) >= self.min_samples_for_training:
-                            self.make_prediction()
+                        # Check if we have enough data for predictions and training
+                        if current_samples >= self.min_samples_for_training:
+                            prediction = self.make_prediction()
+                            prediction_count += 1
 
-                            # Only save data once we're making predictions
+                            # Weight saving logic - only execute after minimum samples
+                            if current_time - last_weight_save_time > weight_save_interval:
+                                logger.info(f"Saving weights after {prediction_count} predictions...")
+                                self.save_model_weights(f"periodic_{prediction_count}")
+                                last_weight_save_time = current_time
+
+                            # Performance monitoring - only after minimum samples
+                            if current_time - last_performance_check > performance_check_interval:
+                                if self.prediction_accuracy:
+                                    current_accuracy = sum(self.prediction_accuracy) / len(self.prediction_accuracy)
+                                    logger.info(f"Current accuracy: {current_accuracy:.2%}")
+
+                                    if current_accuracy > best_accuracy:
+                                        best_accuracy = current_accuracy
+                                        self.save_model_weights("best")
+                                        logger.info(f"New best accuracy: {current_accuracy:.2%} - Saved weights")
+
+                                last_performance_check = current_time
+
+                            # Save trading data - only after minimum samples
                             if current_time - last_save_time > save_interval:
                                 filename = f"kraken_data/trading_data_{int(current_time)}.json"
                                 self.save_trading_data(filename)
                                 last_save_time = current_time
+                                self.log_performance_metrics()
+                        else:
+                            # Log data collection progress
+                            remaining_samples = self.min_samples_for_training - current_samples
+                            logger.info(f"Collecting data: {current_samples}/{self.min_samples_for_training} "
+                                        f"({remaining_samples} more needed before training starts)")
 
-                    self.last_prediction_time = current_time
+                        self.last_prediction_time = current_time
 
                 time.sleep(0.1)  # Prevent CPU overuse
 
         except KeyboardInterrupt:
             logger.info("Stopping analysis gracefully...")
+            if len(self.data.historical_depth) >= self.min_samples_for_training:
+                self.save_model_weights("interrupt")
         except Exception as e:
             logger.error(f"Error in analysis loop: {e}")
-        finally:
             if len(self.data.historical_depth) >= self.min_samples_for_training:
-                self.save_trading_data("kraken_data/final_trading_data.json")
+                self.save_model_weights("error")
+            import traceback
+            logger.error(traceback.format_exc())
+        finally:
+            # Only save final state if we collected enough data
+            if len(self.data.historical_depth) >= self.min_samples_for_training:
+                prediction = self.make_prediction()
+                self.monitor_performance()
+                self.log_market_conditions()
+            else:
+                logger.warning(f"Program terminated before collecting minimum samples "
+                                f"({len(self.data.historical_depth)}/{self.min_samples_for_training})")
+
+
+    def log_performance_metrics(self):
+        """Log detailed performance metrics"""
+        try:
+            if self.prediction_accuracy and self.prediction_history:
+                current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+
+                # Calculate overall accuracy
+                accuracy = sum(self.prediction_accuracy) / len(self.prediction_accuracy)
+                win_rate = (self.trades_won / self.total_trades) if self.total_trades > 0 else 0
+
+                # Calculate direction distribution
+                total_predictions = len(self.prediction_history)
+                down_count = sum(1 for p in self.prediction_history if p == 0)
+                stable_count = sum(1 for p in self.prediction_history if p == 1)
+                up_count = sum(1 for p in self.prediction_history if p == 2)
+
+                # Create performance report
+                report = [
+                    f"\n[bold cyan]Performance Metrics ({current_time}):[/bold cyan]",
+                    f"Accuracy: {accuracy:.2%}",
+                    f"Win Rate: {win_rate:.2%}",
+                    f"Total Trades: {self.total_trades}",
+                    f"Trades Won: {self.trades_won}",
+                    f"Current Streak: {self.current_streak}",
+                    f"Longest Winning Streak: {self.longest_winning_streak}",
+                    f"Total Predictions: {total_predictions}",
+                    "\nDirection Distribution:",
+                    f"  DOWN: {down_count} ({down_count/total_predictions:.1%})",
+                    f"  STABLE: {stable_count} ({stable_count/total_predictions:.1%})",
+                    f"  UP: {up_count} ({up_count/total_predictions:.1%})"
+                ]
+
+                if self.last_prediction_confidence:
+                    report.append(f"Last Prediction Confidence: {self.last_prediction_confidence:.2%}")
+
+                # Add PnL information if available
+                if hasattr(self, 'total_pnl'):
+                    report.append(f"Total PnL: ${self.total_pnl:,.2f}")
+
+                console.print("\n".join(report))
+                console.print("[bold cyan]" + "-" * 50 + "[/bold cyan]")
+
+        except Exception as e:
+            logger.error(f"Error logging performance metrics: {e}")
+    def monitor_system_resources(self):
+        """Monitor system resource usage"""
+        try:
+
+            # Get CPU and memory usage
+            cpu_percent = psutil.cpu_percent()
+            memory = psutil.virtual_memory()
+
+            if cpu_percent > 80 or memory.percent > 80:
+                logger.warning(f"High resource usage - CPU: {cpu_percent}%, Memory: {memory.percent}%")
+
+        except ImportError:
+            pass  # psutil not available
+        except Exception as e:
+            logger.error(f"Error monitoring system resources: {e}")
 
 # WebSocket handlers
 def on_open(ws):
@@ -580,7 +870,7 @@ def main():
         os.makedirs("kraken_data", exist_ok=True)
         os.makedirs("weights", exist_ok=True)
 
-        logger.info("\nInitializing Neural Network Trading System...")
+        console.print("\n[bold green]Initializing Neural Network Trading System...[/bold green]")
 
         # System information
         logger.info(f"Python version: {sys.version}")
@@ -615,6 +905,10 @@ def main():
             try:
                 analyzer.running = False
                 ws.close()
+
+                # Save final weights before shutdown
+                analyzer.save_model_weights("emergency")
+
                 final_snapshot = "kraken_data/final_snapshot.json"
                 data_mgr.save_snapshots_to_file(final_snapshot)
                 logger.info(f"Final snapshot saved to {final_snapshot}")
@@ -624,7 +918,7 @@ def main():
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        logger.info("\nStarting trading system...")
+        console.print("\n[bold green]Starting trading system...[/bold green]")
 
         # Start WebSocket in background thread
         ws_thread = threading.Thread(target=ws.run_forever, daemon=True)
