@@ -24,3 +24,7 @@ pip install tensorflow keras sklearn tensorflow[and-cuda] libwebsocketpp-dev pyb
 
 https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local
 https://www.tensorflow.org/install/pip
+
+
+Using @zaphoyd 's websocketpp for the websocket connection
+https://github.com/zaphoyd/websocketpp
