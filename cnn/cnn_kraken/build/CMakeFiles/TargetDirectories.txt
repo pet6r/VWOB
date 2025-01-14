@@ -1,0 +1,3 @@
+/home/ptr/Documents/vwob/cnn/cnn_kraken/build/CMakeFiles/websocket_handler.dir
+/home/ptr/Documents/vwob/cnn/cnn_kraken/build/CMakeFiles/edit_cache.dir
+/home/ptr/Documents/vwob/cnn/cnn_kraken/build/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -flto -shared  -o websocket_handler.cpython-312-x86_64-linux-gnu.so CMakeFiles/websocket_handler.dir/websocket_handler.cpp.o  /usr/lib/x86_64-linux-gnu/libssl.so /usr/lib/x86_64-linux-gnu/libcrypto.so 
