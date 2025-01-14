@@ -8,7 +8,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+#build/
 develop-eggs/
 dist/
 downloads/
@@ -183,7 +183,7 @@ subscribe.py
 subscribe_ack.py
 binance_ws.py
 
-# Folders 
+# Folders
 
 kraken_data/*
 alpaca_data/*

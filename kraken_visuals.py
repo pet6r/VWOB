@@ -373,7 +373,7 @@ def on_open(ws):
     print("Authencating with Kraken")
     subscription = {
         "event": "subscribe",
-        "pair": ["BTC/USDT"],
+        "pair": ["XBT/USDT"],
         "subscription": {"name": "book", "depth": 1000},
     }
     ws.send(json.dumps(subscription))
