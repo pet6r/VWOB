@@ -32,6 +32,7 @@ class DataManager:
 
     def on_message(self, ws, msg):
         """Callback from websocket, push raw message to queue."""
+        #print("Received message:", msg)  # Debugging print statement
         self.message_queue.put(msg)
 
     def process_messages(self):
@@ -57,6 +58,9 @@ class DataManager:
                             self.ask_data.pop(price, None)
                         else:
                             self.ask_data[price] = volume
+
+                    #print("Processed bids:", self.bid_data)  # Debugging print statement
+                    #print("Processed asks:", self.ask_data)  # Debugging print statement
             except Exception as e:
                 print("Error processing message:", e)
 
@@ -131,6 +135,7 @@ class DataManager:
             )
             cols.extend([color] * 5)
 
+        #print("Built wireframe geometry:", verts, cols)  # Debugging print statement
         return np.array(verts, dtype=np.float32), np.array(cols, dtype=np.float32)
 
     def get_market_control(self):
@@ -204,10 +209,10 @@ class VaporWaveOrderBookVisualizer:
         for i in range(512):
             for j in range(512):
                 t = float(i) / 511
-                plane_data[i, j, 0] = t
-                plane_data[i, j, 1] = 0
-                plane_data[i, j, 2] = t
-                plane_data[i, j, 3] = 1.0
+                plane_data[i, j, 0] = 0  # Red channel set to 0 for black
+                plane_data[i, j, 1] = 0  # Green channel set to 0 for black
+                plane_data[i, j, 2] = 0  # Blue channel set to 0 for black
+                plane_data[i, j, 3] = 1.0  # Alpha channel remains 1.0 for full opacity
         self.plane_tex = scene.visuals.Image(
             data=plane_data, parent=self.view.scene, interpolation="linear"
         )  # xzy
@@ -215,7 +220,6 @@ class VaporWaveOrderBookVisualizer:
             translate=(-plane_size / 2, -plane_size / 2, 0),
             scale=(plane_size / 512, plane_size / 512, 1),
         )
-
         # main wireframe
         self.batched_wireframe = scene.visuals.Line(parent=self.view.scene)
 
@@ -340,7 +344,7 @@ class VaporWaveOrderBookVisualizer:
 
         # 7) White Outline For Latest Snapshot
         if self.data.historical_depth:
-            newest_verts, newest_cols = self.data.historical_depth[-2]
+            newest_verts, newest_cols = self.data.historical_depth[-1]
             outline_verts = newest_verts.copy()
             outline_cols = np.ones_like(newest_cols)
             # ARGB => set R,G,B=1, alpha=1 => pure white
@@ -411,10 +415,18 @@ def main():
     # Create visualizer referencing that data
     viz = VaporWaveOrderBookVisualizer(data_mgr)
 
-    # Create and run the websocket in a background thread
+    # run the websocket in a background thread
     ws = build_websocket(data_mgr)
     t = threading.Thread(target=ws.run_forever, daemon=True)
     t.start()
+
+    # Ensure WebSocket is closed properly on exit
+    def on_exit():
+        ws.close()
+        print("WebSocket closed on exit")
+
+    import atexit
+    atexit.register(on_exit)
 
     # Start the Vispy event loop
     viz.run()
