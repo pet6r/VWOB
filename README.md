@@ -2,7 +2,7 @@
 
 A vaporwave-themed 3D wave visualization for orderbook depth analysis *(Currently in progress)*
 
-![Order Book Visualization](https://github.com/user-attachments/assets/32edec6b-3f94-4cc0-b2a0-b7daa8679c2d)
+![Screencast from 2025-01-15 22-51-06 (2)](https://github.com/user-attachments/assets/ecd9f621-72e8-4b4b-98ce-06935424a6bc)
 
 ## 🔧 Supported Exchanges
 
@@ -42,5 +42,3 @@ Visit the official NVIDIA CUDA downloads page:
 This project uses [@zaphoyd's websocketpp](https://github.com/zaphoyd/websocketpp) for the websocket connection (CNN model)
 
 ---
-
-*Made with 💜 and vaporwave aesthetics*
