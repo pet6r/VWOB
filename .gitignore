@@ -182,8 +182,11 @@ auth_ws.py
 subscribe.py
 subscribe_ack.py
 binance_ws.py
+kraken_g.py
+kraken_deeplob.py
+alpaca_deeplob.py
 
 # Folders
-
+/vwob
 kraken_data/*
 alpaca_data/*

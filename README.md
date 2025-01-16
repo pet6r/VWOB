@@ -1,30 +1,46 @@
-# Visual Wave Order Book
+# Vaporwave Order Book
 
-Vaporwave Themed 3D Wave Visualization for orderbook depth analysis, Currently in progress
+A vaporwave-themed 3D wave visualization for orderbook depth analysis *(Currently in progress)*
 
-Kraken US and Coinbase US visualizations work without needing an auth/apikey
+![Order Book Visualization](https://github.com/user-attachments/assets/32edec6b-3f94-4cc0-b2a0-b7daa8679c2d)
 
-Binance also works without an auth/apikey but will not work if you are in the US
+## 🔧 Supported Exchanges
 
-Alpaca requires an apikey and secret to be set in an .env file
+- ✅ **Kraken US** - No authentication required
+- ✅ **Coinbase US** - No authentication required
+- ✅ **Binance** - No authentication required (Not available in US)
+- ✅ **Alpaca** - Requires API key and secret in `.env` file
 
-![image](https://github.com/user-attachments/assets/32edec6b-3f94-4cc0-b2a0-b7daa8679c2d)
+## 📦 Installation
 
-# Dependencies
-
+### Basic Dependencies
 ```bash
+# Python packages
 pip install PyQt5 vispy websocket-client numpy python-dotenv
+
+# System dependencies (Ubuntu/Debian)
+sudo apt install python3-pytqt5
 ```
 
-# For CNN model fun
-
+### CNN Model Dependencies
 ```bash
-pip install tensorflow keras sklearn tensorflow[and-cuda] libwebsocketpp-dev pybind11-dev pybind11 libboost-all-dev
+# Python packages
+pip install tensorflow keras scikit-learn tensorflow[and-cuda] pybind11 numpy
+
+# System dependencies (Ubuntu/Debian)
+sudo apt install pybind11-dev libboost-all-dev
 ```
 
-https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local
-https://www.tensorflow.org/install/pip
+## 🚀 Additional Setup
 
+### CUDA Installation
+Visit the official NVIDIA CUDA downloads page:
+- [CUDA Downloads for Linux x86_64 Ubuntu](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local)
+- [TensorFlow Installation Guide](https://www.tensorflow.org/install/pip)
 
-Using @zaphoyd 's websocketpp for the websocket connection
-https://github.com/zaphoyd/websocketpp
+### WebSocket Connection
+This project uses [@zaphoyd's websocketpp](https://github.com/zaphoyd/websocketpp) for the websocket connection (CNN model)
+
+---
+
+*Made with 💜 and vaporwave aesthetics*
