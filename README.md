@@ -4,7 +4,7 @@ A vaporwave-themed 3D wave visualization for orderbook depth analysis *(Currentl
 <p align="center">
   <img src="https://github.com/user-attachments/assets/ecd9f621-72e8-4b4b-98ce-06935424a6bc" alt="vwob gif" width="550">
 </p>
-<p align="center"><em>running kraken_visual.py</em></p>
+<p align="center"><em>running kraken_visuals.py</em></p>
 
 
 ## 🔧 Supported Exchanges
