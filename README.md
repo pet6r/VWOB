@@ -2,7 +2,8 @@
 
 A vaporwave-themed 3D wave visualization for orderbook depth analysis *(Currently in progress)*
 
-![Screencast from 2025-01-15 22-51-06 (2)](https://github.com/user-attachments/assets/ecd9f621-72e8-4b4b-98ce-06935424a6bc)
+<img src="https://github.com/user-attachments/assets/ecd9f621-72e8-4b4b-98ce-06935424a6bc" alt="vwob gif" width="550">
+
 
 ## 🔧 Supported Exchanges
 
