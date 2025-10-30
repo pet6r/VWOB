@@ -22,7 +22,7 @@ A vaporwave-themed 3D wave visualization for orderbook depth analysis *(Currentl
 pip install PyQt5 vispy websocket-client numpy python-dotenv
 
 # System dependencies (Ubuntu/Debian)
-sudo apt install python3-pytqt5
+sudo apt install python3-pyqt5
 ```
 
 ### CNN Model Dependencies
