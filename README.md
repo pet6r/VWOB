@@ -1,47 +1,64 @@
 # Vaporwave Order Book
 
-A vaporwave-themed 3D wave visualization for orderbook depth analysis *(Currently in progress)*
+A vaporwave-themed 3D wave visualization for orderbook depth analysis
 <p align="center">
   <img src="https://github.com/user-attachments/assets/ecd9f621-72e8-4b4b-98ce-06935424a6bc" alt="vwob gif" width="550">
 </p>
 <p align="center"><em>running kraken_visuals.py</em></p>
 
+## Supported Exchanges
 
-## 🔧 Supported Exchanges
+- **Kraken** — No authentication required
+- **Coinbase** — No authentication required
+- **Binance** — No authentication required (not available in US)
+- **Alpaca** — Requires API key and secret in `.env` file (see `.env_example`)
 
-- ✅ **Kraken US** - No authentication required
-- ✅ **Coinbase US** - No authentication required
-- ✅ **Binance** - No authentication required (Not available in US)
-- ✅ **Alpaca** - Requires API key and secret in `.env` file
+## Setup
 
-## 📦 Installation
+### 1. Install uv
 
-### Basic Dependencies
 ```bash
-# Python packages
-pip install PyQt5 vispy websocket-client numpy python-dotenv
-
-# System dependencies (Ubuntu/Debian)
-sudo apt install python3-pyqt5
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### CNN Model Dependencies
-```bash
-# Python packages
-pip install tensorflow keras scikit-learn tensorflow[and-cuda] pybind11 numpy
+### 2. Clone and sync
 
-# System dependencies (Ubuntu/Debian)
-sudo apt install pybind11-dev libboost-all-dev
+```bash
+git clone https://github.com/pet6r/VWOB.git
+cd VWOB
+uv sync
 ```
 
-## 🚀 Additional Setup
+This creates the `.venv` and installs all dependencies from `pyproject.toml`.
 
-### CUDA Installation
-Visit the official NVIDIA CUDA downloads page:
-- [CUDA Downloads for Linux x86_64 Ubuntu](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=24.04&target_type=deb_local)
-- [TensorFlow Installation Guide](https://www.tensorflow.org/install/pip)
+## Usage
 
-### WebSocket Connection
-This project uses [@zaphoyd's websocketpp](https://github.com/zaphoyd/websocketpp) for the websocket connection (CNN model)
+```bash
+# 3D mountain orderbook (default: XBT/USD)
+uv run kraken_mountain.py
 
----
+# Specify a different pair
+uv run kraken_mountain.py --pair ETH/USD
+
+# Original vaporwave visualizer
+uv run kraken_visuals.py
+```
+
+### Other exchanges
+
+```bash
+uv run coinbase_visuals.py
+uv run binance_visuals.py
+uv run alpaca_visuals.py   # requires .env
+```
+
+## Controls (kraken_mountain)
+
+| Key | Action |
+|-----|--------|
+| Arrow Keys | Rotate camera |
+| W / A / S / D | Fly through scene |
+| + / - | Zoom in / out |
+| [ / ] | Adjust orderbook depth levels |
+| I | Toggle HUD stats |
+| R | Reset camera |

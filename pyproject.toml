@@ -1,0 +1,15 @@
+[project]
+name = "vwob"
+version = "0.1.0"
+description = "Vaporwave-themed 3D wave visualization for orderbook depth analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "vispy",
+    "websocket-client",
+    "python-dotenv",
+    "PyQt5",
+    "polars",
+]
+
