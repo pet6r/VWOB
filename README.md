@@ -2,7 +2,7 @@
 
 A vaporwave-themed 3D wave visualization for orderbook depth analysis
 
-<p align="center"><em>running kraken_mountain.py</em></p>
+<img width="1319" height="1032" alt="image" src="https://github.com/user-attachments/assets/6610893c-92f5-42be-acab-74480d17fb47" />
 
 ## Supported Exchanges
 
